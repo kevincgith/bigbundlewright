@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Big Bundle Wright"><title>Big Bundle Wright</title>
+<g transform="translate(0 4) scale(1.0)">
+  <rect x="84" y="40" width="112" height="150" rx="6" fill="#D3C6AA"/>
+  <rect x="76" y="48" width="112" height="150" rx="6" fill="#E6DCC6"/>
+  <rect x="176" y="70" width="22" height="22" rx="4" fill="#E3A83B"/>
+  <rect x="176" y="100" width="22" height="22" rx="4" fill="#3E9C93"/>
+  <rect x="176" y="130" width="22" height="22" rx="4" fill="#DD6E4E"/>
+  <rect x="60" y="58" width="122" height="158" rx="7" fill="#F7F2E7"/>
+  <g stroke="#B9AE96" stroke-width="5" stroke-linecap="round">
+    <line x1="76" y1="80" x2="110" y2="80"/>
+    <line x1="140" y1="80" x2="166" y2="80"/>
+    <line x1="76" y1="96" x2="104" y2="96"/>
+    <line x1="140" y1="96" x2="160" y2="96"/>
+    <line x1="76" y1="172" x2="108" y2="172"/>
+    <line x1="140" y1="172" x2="166" y2="172"/>
+    <line x1="76" y1="188" x2="100" y2="188"/>
+    <line x1="140" y1="188" x2="158" y2="188"/>
+  </g>
+  <rect x="60" y="130" width="122" height="13" fill="#C8416A"/>
+  <rect x="115" y="58" width="13" height="158" fill="#C8416A"/>
+  <path d="M124 133 C 138 104, 168 104, 160 124 C 155 136, 138 138, 126 137 Z" fill="none" stroke="#C8416A" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M117 141 C 110 156, 100 166, 90 178" fill="none" stroke="#9E2F52" stroke-width="10" stroke-linecap="butt"/>
+  <path d="M126 141 C 130 158, 136 170, 146 184" fill="none" stroke="#9E2F52" stroke-width="10" stroke-linecap="butt"/>
+  <circle cx="121.5" cy="136.5" r="10" fill="#9E2F52"/>
+</g>
+</svg>

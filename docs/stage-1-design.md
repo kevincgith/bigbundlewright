@@ -2,7 +2,7 @@
 
 *Court bundles fit for a 大狀*
 
-Status: **draft for review**. Nothing is built yet. This doc covers the reference
+Status: **decided** (24 Nov 2026). You asked me to make the calls; the decisions are in §6. This doc covers the reference
 analysis, the PD 5.6 reading, the proposed structure and data model, the licence
 choice, and the open questions that need your decision.
 
@@ -312,8 +312,11 @@ from in-house IT or legal teams.
      end of the 3rd working day before.
    - (b) Count back from the listed hearing time (e.g. 10:00).
 
-   I'd suggest (a), shown as "lodge by 23:59 on <date>", since (b) is the more
-   aggressive reading.
+   I'd suggest (a), since (b) is the more aggressive reading. (Correction: 72
+   working hours back from 00:00 on the hearing date ends at 00:00 on the 3rd
+   working day before, so the practical deadline is close of business on the
+   **4th** working day before. Example: a Monday hearing means lodging by
+   Tuesday of the previous week.)
 8. **Landscape pages.** In a paper file a landscape page is bound with its top
    at the spine, so the number should go at the *portrait* top-right. On screen,
    you asked for auto-rotation so the page reads upright, which puts the stamp at
@@ -384,6 +387,24 @@ Liberation Sans for parity. We won't bundle Garamond, Plus Jakarta or Ubuntu Mon
 unless you want the full set: each adds weight and none renders Chinese.
 
 ---
+
+### Decisions (adopted 24 Nov 2026)
+1. Index and front-sheet pages carry no bundle page number. Their PDF page label
+   is "Index i, ii…", with a small roman numeral at the bottom centre.
+2. A status front sheet goes in every volume, and status also appears as a column
+   in each index and the master index. Stage 2 ships the index column and legend;
+   the per-volume front sheet comes in stage 3.
+3. The core-bundle threshold counts document pages only.
+4. Transcripts get their own bundle numbered T1, T2…
+5. "More than 5 bundles" counts every physical file, including core and transcripts.
+6. A typed copy is a normal page in the run. Once numbering is frozen, it is
+   numbered like an insert (45-1).
+7. Lodging deadline: 00:00 on the 3rd working day before the hearing date, i.e. by
+   close of business on the 4th working day before.
+8. Landscape pages are output as A4 landscape (upright on screen), stamped at the
+   visual top-right. A print-layout option comes later.
+9. Licence: MPL 2.0 for the whole repo.
+10. Embedding the project in the PDF is opt-in, as a visible attachment. Off by default.
 
 ## 7. Stage 2 plan (once you've answered)
 

@@ -4,3 +4,5 @@ dist/
 .DS_Store
 *.local
 out/
+test/fixtures/out/
+test/fixtures/out-bad/
