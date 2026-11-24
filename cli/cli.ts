@@ -44,7 +44,7 @@ async function main(argv: string[]) {
     const out = resolve(values.out ?? join(dir, 'project.json'));
     await writeFile(out, JSON.stringify(project, null, 2));
     log(`Wrote ${out}: ${project.docs.length} documents, ${project.files.reduce((a, f) => a + f.pageCount, 0)} pages.`);
-    for (const e of errors) console.error(`  ✗ ${e.message}`);
+    for (const e of errors) console.error(`  Error: ${e.message}`);
     return errors.length ? 2 : 0;
   }
 
@@ -71,16 +71,16 @@ async function main(argv: string[]) {
     for (const v of result.volumes) {
       await writeFile(join(outDir, v.fileName), v.bytes);
       const front = `${v.frontSheetPages ? `${v.frontSheetPages} status + ` : ''}${v.prelimPages - v.frontSheetPages} index`;
-      log(`  ✓ ${v.fileName}: ${v.pageCount} pages (${front} + pages ${v.firstLabel}–${v.lastLabel})`);
+      log(`  Wrote ${v.fileName}: ${v.pageCount} pages (${front} + pages ${v.firstLabel}–${v.lastLabel})`);
     }
     if (result.masterIndex) {
       await writeFile(join(outDir, result.masterIndex.fileName), result.masterIndex.bytes);
-      log(`  ✓ ${result.masterIndex.fileName}`);
+      log(`  Wrote ${result.masterIndex.fileName}`);
     }
     await writeFile(join(outDir, 'build-report.json'), JSON.stringify({ warnings: result.warnings }, null, 2));
     if (result.issuedProject) {
       await writeFile(projPath, serializeProject(result.issuedProject));
-      log(`  ✓ Issued: page numbers are now locked in ${projPath}`);
+      log(`  Issued: page numbers are now locked in ${projPath}`);
     }
     if (result.warnings.length) {
       log(`\n${result.warnings.length} warning(s):`);
@@ -111,6 +111,6 @@ async function main(argv: string[]) {
 }
 
 main(process.argv.slice(2)).then((code) => process.exit(code), (e) => {
-  console.error(e instanceof SourceError || e instanceof ProjectError ? `✗ ${e.message}` : e);
+  console.error(e instanceof SourceError || e instanceof ProjectError ? `Error: ${e.message}` : e);
   process.exit(1);
 });
