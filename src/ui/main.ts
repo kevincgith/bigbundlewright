@@ -729,9 +729,9 @@ function renderAll() {
 // ---------------------------------------------------------------- boot
 
 (document.getElementById('logo') as HTMLImageElement).src = logoUrl;
-document.getElementById('privacy-how')!.addEventListener('toggle', () => undefined);
 // Keep a dropped file from opening in the tab if it misses the drop zone.
 window.addEventListener('dragover', (e) => { if (!dragId) e.preventDefault(); });
 window.addEventListener('drop', (e) => { if (!dragId) e.preventDefault(); });
 renderAll();
 offerRestore();
+
