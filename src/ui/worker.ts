@@ -8,6 +8,7 @@ import {
   analysePdf, buildBundle, exportBundle, loadSource, planProject, projectNeedsCjkFonts, FONT_FILES, ProjectError, SourceError,
   type FontBytes, type LoadedSource, type PageAnalysis, type Project,
 } from '../engine/index.ts';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { FromWorker, ToWorker, FileFlags, PlanSummary } from './protocol.ts';
 
 // Run pdf.js in this worker (no nested worker).
@@ -145,6 +146,33 @@ function summarise(plan: Awaited<ReturnType<typeof planProject>>): PlanSummary {
   return { volumes: vols, warnings: plan.warnings, physicalFiles: plan.physicalFiles, placement };
 }
 
+/** Example documents for the walk-through, generated here (nothing is downloaded). */
+async function exampleFiles() {
+  const set: [string, string, number][] = [
+    ['2025-01-03 Writ of Summons.pdf', 'WRIT OF SUMMONS', 3],
+    ['2025-02-14 Statement of Claim.pdf', 'STATEMENT OF CLAIM', 6],
+    ['2025-03-21 Defence.pdf', 'DEFENCE', 5],
+    ['2025-05-02 Letter Lee & Co to Ho Solicitors.pdf', 'LETTER', 2],
+    ['2025-05-09 Reply Ho Solicitors to Lee & Co.pdf', 'LETTER', 1],
+    ['2025-06-30 Witness statement of Chan Tai Man.pdf', 'WITNESS STATEMENT OF CHAN TAI MAN', 8],
+  ];
+  const out: { name: string; bytes: Uint8Array }[] = [];
+  for (const [name, heading, pages] of set) {
+    const doc = await PDFDocument.create();
+    const serif = await doc.embedFont(StandardFonts.TimesRoman);
+    const bold = await doc.embedFont(StandardFonts.TimesRomanBold);
+    for (let n = 1; n <= pages; n++) {
+      const pg = doc.addPage([595.28, 841.89]);
+      pg.drawText('HCA 1234/2025', { x: 72, y: 770, size: 11, font: bold });
+      pg.drawText(heading, { x: 72, y: 730, size: 14, font: bold });
+      pg.drawText(`Page ${n} of ${pages}`, { x: 72, y: 710, size: 10, font: serif, color: rgb(0.35, 0.35, 0.4) });
+      for (let l = 0; l < 22; l++) pg.drawText('This is an example document made by Big Bundle Wright for the walk-through. It is not a real case.', { x: 72, y: 670 - l * 24, size: 10.5, font: serif });
+    }
+    out.push({ name, bytes: await doc.save() });
+  }
+  return out;
+}
+
 self.onmessage = async (e: MessageEvent<ToWorker>) => {
   const m = e.data;
   try {
@@ -157,6 +185,11 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
         bySha.delete(m.sha);
         analysed.delete(m.sha);
         break;
+      case 'samples': {
+        const files = await exampleFiles();
+        post({ type: 'samples', reqId: m.reqId, files }, files.map((f) => f.bytes.buffer as ArrayBuffer));
+        break;
+      }
       case 'ingest': {
         const src = await loadSource(m.tempId, m.name, new Uint8Array(m.bytes));
         if (!bySha.has(src.ref.sha256)) bySha.set(src.ref.sha256, src);

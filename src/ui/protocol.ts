@@ -19,7 +19,8 @@ export type ToWorker =
   | { type: 'build'; reqId: string; project: Project; issue?: boolean; prelimsOnly?: boolean }
   | { type: 'cancel' }
   | { type: 'init'; base: string }
-  | { type: 'forget'; sha: string };
+  | { type: 'forget'; sha: string }
+  | { type: 'samples'; reqId: string };
 
 export type FromWorker =
   | { type: 'ingested'; reqId: string; ref: SourceFileRef }
@@ -35,4 +36,5 @@ export type FromWorker =
     checks?: ComplianceCheck[];
     warnings: BuildWarning[]; issuedProject?: Project;
   }
+  | { type: 'samples'; reqId: string; files: { name: string; bytes: Uint8Array }[] }
   | { type: 'error'; reqId: string; name: string; code?: string; fileName?: string; message: string };

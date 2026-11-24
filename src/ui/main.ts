@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import './styles.css';
-import logoUrl from '../../assets/logo/glass-horizontal.svg?url';
+import iconUrl from '../../assets/logo/glass-icon.svg?url';
 import {
   DEFAULT_SETTINGS, chronologyWarnings, describeDeadline, lodgingDeadline, parseFileName, parseProject,
   serializeProject, unfreezeProject, outputBaseName, validSectionLetter, PROJECT_SCHEMA,
@@ -11,11 +11,12 @@ import {
 import { orderedDocs } from '../engine/plan.ts';
 import { announce, download, h, replace, uid } from './dom.ts';
 import BundleWorker from './worker.ts?worker&inline';
+import { startTour, tourIsOpen, type TourStep } from './tour.ts';
 import type { FileFlags, FromWorker, PlanSummary, ToWorker } from './protocol.ts';
 import type { ComplianceCheck } from '../engine/compliance.ts';
 
 const VERSION = '0.4.0';
-const LS = { autosave: 'bigbundlewright:autosave', project: 'bigbundlewright:project', defaults: 'bigbundlewright:defaults', guide: 'bigbundlewright:guide-dismissed' };
+const LS = { autosave: 'bigbundlewright:autosave', project: 'bigbundlewright:project', defaults: 'bigbundlewright:defaults', guide: 'bigbundlewright:guide-dismissed', toured: 'bigbundlewright:toured' };
 
 // ---------------------------------------------------------------- worker RPC
 
@@ -461,6 +462,7 @@ const $ = (id: string) => document.getElementById(id)!;
 
 function renderHeader() {
   replace($('hdr-actions'),
+    h('button', { class: 'btn ghost', dataset: { key: 'tour' }, onclick: () => openTour() }, 'Tour'),
     h('button', { class: 'btn', onclick: () => { const i = h('input', { type: 'file', accept: '.json,application/json' }); i.onchange = () => i.files?.[0] && openProject(i.files[0]); i.click(); } }, 'Open project…'),
     h('button', { class: 'btn', onclick: saveProject, disabled: !S.project.docs.length }, 'Save project'),
     h('button', {
@@ -475,16 +477,21 @@ function renderGuide() {
   const el = $('guide');
   if (store.get(LS.guide) === '1') { el.hidden = true; return; }
   el.hidden = false;
+  const items: [string, string, string][] = [
+    ['Para 1', 'Leave out unnecessary documents.', 'Only those likely to be referred to at trial.'],
+    ['Para 2', 'A core bundle over 100 pages.', 'The documents central to the dispute.'],
+    ['Para 3', 'Status of each document.', 'Marked on the front of the bundle.'],
+    ['Para 4', 'Chronological order, numbered top right.', 'Paged consecutively from the front.'],
+    ['Para 5', 'No more than 250 pages a file.', 'Transcripts go in a separate bundle.'],
+    ['Para 8', 'Lodge at least 72 hours ahead.', 'Not counting weekends and general holidays.'],
+  ];
   replace(el,
-    h('div', { class: 'guide-head' }, h('h2', null, 'Before you start: PD 5.6 in brief'),
-      h('button', { class: 'btn ghost small', onclick: () => { store.set(LS.guide, '1'); renderGuide(); } }, 'Hide')),
-    h('ul', { class: 'guide' },
-      h('li', null, h('strong', null, 'Leave out unnecessary documents'), ' — only those likely to be referred to at trial (para 1).'),
-      h('li', null, h('strong', null, 'Chronological order'), ', paged consecutively in the top right-hand corner (para 4).'),
-      h('li', null, h('strong', null, 'No more than 250 pages a file'), '; transcripts in a separate bundle (para 5).'),
-      h('li', null, h('strong', null, 'Core bundle'), ' where the agreed bundle exceeds 100 pages (para 2).'),
-      h('li', null, h('strong', null, 'Status of each document'), ' marked on the front (para 3).'),
-      h('li', null, h('strong', null, 'Lodge at least 72 hours'), ' before the hearing, not counting weekends and general holidays (para 8).')));
+    h('div', { class: 'guide-head' },
+      h('h2', null, 'PD 5.6 in brief'),
+      h('div', { class: 'guide-actions' },
+        h('button', { class: 'linkbtn', dataset: { key: 'guide-tour' }, onclick: () => openTour() }, store.get(LS.toured) ? 'Show the walk-through again' : 'New here? Take the two-minute walk-through'),
+        h('button', { class: 'btn ghost small', dataset: { key: 'guide-hide' }, onclick: () => { store.set(LS.guide, '1'); renderGuide(); } }, 'Hide'))),
+    h('ul', { class: 'pd-list' }, ...items.map(([ref, lead, rest]) => h('li', null, h('span', { class: 'ref' }, ref), h('span', null, h('b', null, lead), ' ', rest)))));
 }
 
 function field(label: string, input: HTMLElement, hint?: string) {
@@ -902,8 +909,83 @@ function renderAll() {
 
 // ---------------------------------------------------------------- boot
 
+// ---------------------------------------------------------------- example documents and the walk-through
+
+/** Make a few example PDFs on this device (nothing is downloaded) and add them like any other files. */
+async function loadExamples() {
+  if (S.project.docs.length && !(await confirmDialog('Add example documents?', ['The example documents are added to your current list. Use "New" first if you want to start clean.'], 'Add them'))) return;
+  const r = await call<'samples'>({ type: 'samples', reqId: uid('r') });
+  const files = r.files.map((f) => new File([f.bytes as BlobPart], f.name, { type: 'application/pdf' }));
+  const c = S.project.case;
+  if (!c.actionNo && !c.shortTitle) {
+    c.actionNo = 'HCA 1234/2025';
+    c.shortTitle = 'Chan v Wong (example)';
+    c.parties = [{ name: 'CHAN TAI MAN', role: 'Plaintiff' }, { name: 'WONG SIU MING', role: 'Defendant' }];
+    renderCase();
+  }
+  await addFiles(files);
+}
+
+function tourSteps(): TourStep[] {
+  const q = (sel: string) => () => document.querySelector(sel);
+  const p = (t: string) => h('p', null, t);
+  return [
+    {
+      title: 'How Big Bundle Wright works',
+      body: [p('This walk-through takes about two minutes. It goes through the four parts of the page: case details, documents, settings and build.'),
+        p('You can follow along with your own files, or with a few example documents made on this device.')],
+      actions: S.project.docs.length ? undefined : [{ label: 'Use example documents', run: loadExamples }, { label: 'Use my own files', primary: true, run: () => undefined }],
+    },
+    {
+      target: q('#case .grid2'), title: 'Case details',
+      body: [p('Enter the action number and the parties as they appear in the title of the action.'),
+        p('The short title goes into the file names, for example "HCA 1234-2025 Chan v Wong Bundle A.pdf". Add the hearing date to see the lodging deadline under PD 5.6 para 8.')],
+    },
+    {
+      target: q('#docs .drop'), title: 'Add the documents',
+      body: [p('Drop PDFs, JPGs or PNGs here, or click to choose them. Dates and titles are read from file names such as "2025-03-15 Letter to D.pdf".'),
+        p('Password-protected PDFs and Word files are refused with a message saying what to do.')],
+    },
+    {
+      target: () => document.querySelector('#docs table.docs tbody tr') ?? document.querySelector('#docs'), title: 'Check the list',
+      body: [p('Each row is one document, in bundle order. Check its date and description, and choose its status under PD 5.6 para 3.'),
+        p('To reorder, drag the handle at the left, or focus it and press Alt with the up or down arrow. Tick Core for the documents central to the dispute.')],
+    },
+    {
+      target: () => document.querySelector('#docs tbody tr td.desc') ?? document.querySelector('#docs'), title: 'What each row tells you',
+      body: [p('Under each description you can see where the document will land, for example "Bundle A, pages 1–8".'),
+        p('Labels mark anything worth a look: scanned pages with no searchable text, content close to the edge, a missing date or a duplicate file.')],
+    },
+    {
+      target: q('#settings'), title: 'Settings',
+      body: [p('The defaults follow PD 5.6: numbers in the top right-hand corner, no more than 250 pages a file, and a status front sheet. Change them only if the parties have agreed something different.')],
+    },
+    {
+      target: () => document.querySelector('#build .row') ?? document.querySelector('#build'), title: 'Build the bundle',
+      body: [h('ul', null,
+        h('li', null, h('b', null, 'Preview index'), ' builds just the index pages, to check them quickly.'),
+        h('li', null, h('b', null, 'Build bundle'), ' gives one ZIP: every volume, the Word index, spine labels and a compliance report.'),
+        h('li', null, h('b', null, 'Build and issue'), ' also locks the page numbers, so late documents go in as 88-1, 88-2 without renumbering.'))],
+    },
+    {
+      target: q('#hdr-actions'), title: 'Save your project',
+      body: [p('Save the project file to come back later. It holds the list, dates, descriptions and settings, never the documents themselves.'),
+        p('When you open it again, add the same files; they are recognised by their content, even if renamed.')],
+    },
+    {
+      title: 'That is the whole process',
+      body: [p('Reopen this walk-through any time with "Tour" at the top of the page.')],
+    },
+  ];
+}
+
+function openTour() {
+  if (tourIsOpen() || S.job) return;
+  startTour(tourSteps(), { onClose: () => { store.set(LS.toured, '1'); renderGuide(); } });
+}
+
 startWorker();
-(document.getElementById('logo') as HTMLImageElement).src = logoUrl;
+for (const img of document.querySelectorAll<HTMLImageElement>('img.brand-icon')) img.src = iconUrl;
 // Keep a dropped file from opening in the tab if it misses the drop zone.
 window.addEventListener('dragover', (e) => { if (!dragId) e.preventDefault(); });
 window.addEventListener('drop', (e) => { if (!dragId) e.preventDefault(); });
