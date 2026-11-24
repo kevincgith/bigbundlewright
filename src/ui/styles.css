@@ -1,4 +1,4 @@
-/* Big Bundle Wright: the navy and paper of docs/share-page.html, kept plain.
+/* Big Bundle Wright: the navy and paper of docs/share-page.html, kept plain. Light by default; dark optional.
    Flat surfaces, hairline rules, serif headings; nothing decorative.
    Fonts are bundled with the site (OFL, via @fontsource); Chinese uses the system's TC fonts. */
 @import '@fontsource-variable/plus-jakarta-sans/wght.css';
@@ -8,32 +8,69 @@
 @import '@fontsource/ibm-plex-mono/600.css';
 
 :root {
+  /* Light (default): paper and navy ink, for easy reading. */
+  --bg: #F3F5FA;
+  --surface: #FFFFFF;
+  --surface-2: #EEF2FA;
+  --field: #FFFFFF;
+  --ink: #16204A;
+  --muted: #475380;
+  --faint: #5F6A8F;
+  --rule: #DCE3F1;
+  --rule-strong: #B9C4DE;
+  --rule-hover: #8E9CC4;
+  --accent: #2B4BB3;
+  --accent-hi: #1F3A94;
+  --on-accent: #FFFFFF;
+  --link: #2B4BB3;
+  --drop-line: #A6B3D6;
+  --warn: #7A4F00;
+  --warn-bg: #FFF5DD;
+  --warn-line: #E2BE72;
+  --bad: #A12622;
+  --bad-bg: #FDECEA;
+  --bad-line: #E7A3A0;
+  --shade: rgba(22, 32, 74, .55);
+  --paper-edge: #DCE3F4;
+
+  --paper: #F7F9FE;
+  --paper-ink: #16204A;
+  --paper-muted: #5A6690;
+  --paper-rule: #DCE3F4;
+  --paper-link: #2B4BB3;
+
+  --f-ui: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", "Helvetica Neue", Arial, "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --f-doc: "Noto Serif", Georgia, "Times New Roman", "Songti TC", "PMingLiU", serif;
+  --f-zh: "Noto Serif TC", "Songti TC", "PingFang TC", "PMingLiU", serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+
+/* Dark: the navy of the share page. */
+:root[data-theme="dark"] {
   --bg: #0B1128;
   --surface: #111936;
   --surface-2: #16203F;
   --field: #0D1430;
   --ink: #EEF2FC;
   --muted: #A3B0D6;
-  --faint: #7D89B0;
+  --faint: #8A96BC;
   --rule: #253158;
   --rule-strong: #34416C;
+  --rule-hover: #4D5B91;
   --accent: #C9D5F5;
   --accent-hi: #E3EAFC;
+  --on-accent: #0B1128;
   --link: #B8C8F5;
-  --paper: #F7F9FE;
-  --paper-ink: #16204A;
-  --paper-muted: #5A6690;
-  --paper-rule: #DCE3F4;
-  --paper-link: #2B4BB3;
+  --drop-line: #4A5788;
   --warn: #EFC36E;
   --warn-bg: #2A2617;
+  --warn-line: #6B5626;
   --bad: #F4A3A3;
   --bad-bg: #2E1A22;
-
-  --f-ui: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", "Helvetica Neue", Arial, "PingFang TC", "Microsoft JhengHei", sans-serif;
-  --f-doc: "Noto Serif", Georgia, "Times New Roman", "Songti TC", "PMingLiU", serif;
-  --f-zh: "Noto Serif TC", "Songti TC", "PingFang TC", "PMingLiU", serif;
-  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --bad-line: #6E3340;
+  --shade: rgba(5, 8, 22, .72);
+  --paper-edge: transparent;
   color-scheme: dark;
 }
 
@@ -49,7 +86,7 @@ a { color: var(--link); text-underline-offset: 2px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .skip { position: absolute; left: -999px; }
-.skip:focus { left: 12px; top: 8px; background: var(--accent); color: var(--bg); padding: 6px 12px; z-index: 10; }
+.skip:focus { left: 12px; top: 8px; background: var(--accent); color: var(--on-accent); padding: 6px 12px; z-index: 10; }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .normal { font-weight: 400; font-family: var(--f-ui); }
@@ -97,6 +134,20 @@ details[open] > summary .summary-cue::after { content: "Hide"; }
 .pd-list .ref { font-family: var(--f-mono); font-size: 12.5px; color: var(--accent); padding-top: 1px; }
 .pd-list b { color: var(--ink); font-weight: 600; }
 
+/* What the words mean */
+.terms-card { padding: 16px 24px; }
+.terms-card summary h2 { font-size: 18px; margin: 0; }
+.terms-card details[open] summary h2 { margin-bottom: 12px; }
+.terms { display: grid; grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr); margin: 0; border-top: 1px solid var(--rule); }
+.terms dt, .terms dd { padding: 10px 0; border-bottom: 1px solid var(--rule); margin: 0; }
+.terms dt { font-weight: 600; padding-right: 20px; }
+.terms dd { color: var(--muted); max-width: 46rem; }
+.terms code { font-family: var(--f-mono); font-size: 13px; }
+@media (max-width: 640px) {
+  .terms { grid-template-columns: minmax(0, 1fr); }
+  .terms dt { border-bottom: 0; padding-bottom: 0; }
+}
+
 /* ---------- forms ---------- */
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px 28px; }
 .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; }
@@ -113,7 +164,7 @@ input[type=text], input[type=number], input[type=date], select, textarea {
   font: inherit; font-size: 14.5px; color: var(--ink); min-width: 0;
   background: var(--field); border: 1px solid var(--rule-strong); border-radius: 5px; padding: 7px 9px;
 }
-input:hover, select:hover, textarea:hover { border-color: #46548A; }
+input:hover, select:hover, textarea:hover { border-color: var(--rule-hover); }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 1px var(--accent); }
 select option { background: var(--surface); color: var(--ink); }
 textarea { resize: vertical; font-family: var(--f-doc); font-size: 14px; line-height: 1.45; }
@@ -133,8 +184,8 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
   border: 1px solid var(--rule-strong); background: transparent; border-radius: 5px; padding: 7px 14px;
   display: inline-flex; align-items: center; gap: 6px;
 }
-.btn:hover:not(:disabled) { background: var(--surface-2); border-color: #46548A; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--rule-hover); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.primary:hover:not(:disabled) { background: var(--accent-hi); border-color: var(--accent-hi); }
 .btn.ghost { border-color: transparent; }
 .btn.small { padding: 4px 10px; font-size: 12.5px; }
@@ -154,13 +205,13 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
 .notice.bad { border-left-color: var(--bad); background: var(--bad-bg); }
 .notice ul { margin: 0 0 6px; padding-left: 18px; }
 .badge { font: 500 11.5px var(--f-mono); padding: 1px 6px; border-radius: 3px; white-space: nowrap; color: var(--muted); border: 1px solid var(--rule-strong); }
-.badge.warn { color: var(--warn); border-color: #6B5626; background: var(--warn-bg); }
-.badge.bad { color: var(--bad); border-color: #6E3340; background: var(--bad-bg); }
+.badge.warn { color: var(--warn); border-color: var(--warn-line); background: var(--warn-bg); }
+.badge.bad { color: var(--bad); border-color: var(--bad-line); background: var(--bad-bg); }
 .badge.muted { color: var(--faint); }
 
 /* ---------- documents ---------- */
 .drop {
-  border: 1px dashed #4A5788; border-radius: 6px; padding: 20px 16px; margin: 4px 0 14px;
+  border: 1px dashed var(--drop-line); border-radius: 6px; padding: 20px 16px; margin: 4px 0 14px;
   text-align: center; display: flex; flex-direction: column; gap: 3px; cursor: pointer; color: var(--muted); background: var(--field);
 }
 .drop strong { color: var(--ink); }
@@ -199,13 +250,15 @@ table.docs select { font-size: 13.5px; padding: 6px 5px; max-width: 160px; }
 
 /* ---------- build and results ---------- */
 .plan p { margin: 0 0 10px; color: var(--muted); }
+.btn-help { list-style: none; padding: 0; margin: 10px 0 0; font-size: 13.5px; color: var(--muted); display: grid; gap: 3px; }
+.btn-help b { color: var(--ink); font-weight: 600; }
 .plan strong { color: var(--ink); }
 .job { display: flex; gap: 12px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
 .job progress { width: 320px; max-width: 100%; height: 8px; accent-color: var(--accent); }
 #progress-label { font-family: var(--f-mono); font-size: 13px; color: var(--muted); }
 
 /* The results are a document, so they sit on paper. */
-.results { margin-top: 18px; background: var(--paper); color: var(--paper-ink); border-radius: 6px; padding: 22px 24px 18px; }
+.results { margin-top: 18px; background: var(--paper); color: var(--paper-ink); border: 1px solid var(--paper-edge); border-radius: 6px; padding: 22px 24px 18px; }
 .results h3 { color: var(--paper-ink); margin-top: 0; }
 .results .compliance h3 { margin-top: 22px; }
 .results .muted, .results .hint { color: var(--paper-muted); }
@@ -237,14 +290,14 @@ table.report tr.oo td { background: #FFF8E9; }
 
 /* ---------- dialogs ---------- */
 .dlg { color: var(--ink); background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 8px; padding: 22px 24px; max-width: 540px; width: calc(100% - 32px); }
-.dlg::backdrop { background: rgba(5, 8, 22, .72); }
+.dlg::backdrop { background: var(--shade); }
 .dlg h2 { font-size: 18px; }
 .dlg ul { padding-left: 18px; color: var(--muted); }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 
 /* ---------- guided tour ---------- */
 .tour-shade { position: fixed; inset: 0; z-index: 50; }
-.tour-hole { position: absolute; border-radius: 8px; outline: 2px solid var(--accent); outline-offset: 4px; box-shadow: 0 0 0 9999px rgba(5, 8, 22, .72); pointer-events: none; }
+.tour-hole { position: absolute; border-radius: 8px; outline: 2px solid var(--accent); outline-offset: 4px; box-shadow: 0 0 0 9999px var(--shade); pointer-events: none; }
 .tour-hole.none { width: 0; height: 0; top: 50%; left: 50%; outline: 0; }
 .tour-card { position: fixed; z-index: 51; width: min(380px, calc(100vw - 24px)); background: var(--surface); color: var(--ink); border: 1px solid var(--rule-strong); border-radius: 8px; padding: 18px 20px 16px; }
 .tour-card .tour-count { font: 500 12px var(--f-mono); color: var(--accent); }

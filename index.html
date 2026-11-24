@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
   <title>Big Bundle Wright — court bundles fit for a 大狀</title>
   <meta name="description" content="Free, private tool that turns PDFs into Hong Kong PD 5.6 trial bundles. Your documents never leave this device.">
   <link rel="icon" href="./assets/logo/glass-icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icons/icon-180.png">
-  <meta name="theme-color" content="#0B1128">
+  <meta name="theme-color" content="#F3F5FA">
   <script type="module" src="./src/ui/main.ts"></script>
 </head>
 <body>
@@ -49,6 +49,68 @@
   <main id="main" class="wrap">
     <div id="restore"></div>
     <section id="guide" class="card guide-card" aria-label="PD 5.6 in brief"></section>
+    <section id="terms" class="card terms-card" aria-label="What the words mean">
+      <details>
+        <summary><h2>What is a project, a bundle, a volume, issuing? <span class="summary-cue"></span></h2></summary>
+        <dl class="terms">
+          <dt>Bundle</dt>
+          <dd>The set of documents for the trial judge: in date order, numbered page by page, with an index at the front.
+            PD 5.6 calls it the agreed bundle. Big Bundle Wright makes it as PDF files you can lodge, print or serve.</dd>
+
+          <dt>Volume (Bundle A, Bundle B)</dt>
+          <dd>One file of the bundle. PD 5.6 para 5 says a file should never hold more than 250 pages, so a large bundle
+            is split into Bundle A, Bundle B and so on, each with its own index. A document is only split if it is
+            over 250 pages on its own. The <em>master index</em> lists every document across all volumes.</dd>
+
+          <dt>Index and status front sheet</dt>
+          <dd>The index lists each document with its number, date, description, status and pages, and each entry is a
+            link to its first page. The front sheet, before the index, states which documents fall into each status
+            category (PD 5.6 para 3).</dd>
+
+          <dt>Status</dt>
+          <dd>What the parties have agreed about a document: (1) authentic, (2) agreed for inclusion in the bundle only,
+            or (3) also agreed as evidence of its contents. You choose it for each document in the list.</dd>
+
+          <dt>Core bundle</dt>
+          <dd>A short bundle of the documents central to the dispute, needed when the agreed bundle is over 100 pages
+            (PD 5.6 para 2). Tick "Core" for those documents. Its pages are numbered C1, C2 and its index shows where
+            each document is in the main bundle.</dd>
+
+          <dt>Transcript bundle</dt>
+          <dd>Transcripts of evidence or judgments go in their own bundle (PD 5.6 paras 4 and 5), numbered T1, T2. Set a
+            document's type to "Transcript" and it goes there automatically.</dd>
+
+          <dt>Project</dt>
+          <dd>Your working list on this page: the case details, the documents in order with their dates, descriptions and
+            statuses, and the settings. It lives in this browser tab while you work.</dd>
+
+          <dt>Project file</dt>
+          <dd>A saved copy of the project (a small <code>.json</code> file) so you can come back later. It holds no document
+            contents: only the list, the settings and a fingerprint of each file. To carry on, open it and add the same
+            PDFs again; they are recognised by content, even if renamed. The ZIP from each build includes it.</dd>
+
+          <dt>Issue</dt>
+          <dd>Use "Build and issue" when the bundle is final, for example when you lodge or serve it. Issuing locks every
+            page number. From then on, adding a document never renumbers anything already in the bundle, so references
+            to "page 88" stay right. Save the project file after issuing. "Unlock" undoes this, but the next build then
+            renumbers the whole bundle, so only do it if you will re-issue and re-lodge everything.</dd>
+
+          <dt>Additional documents (88-1, 88-2)</dt>
+          <dd>A document added after issue goes in after a page you choose and takes numbers like 88-1, 88-2, 88-3
+            (PD 5.6 para 1), so page 89 stays page 89. Until you issue again, these new numbers are provisional.</dd>
+
+          <dt>Typed copy</dt>
+          <dd>A typed version of a page that is hard to read, placed straight after it (PD 5.6 para 6).</dd>
+
+          <dt>Cover page</dt>
+          <dd>An optional page of your own, such as a firm cover sheet, placed before the index. It is not numbered.</dd>
+
+          <dt>Lodging deadline</dt>
+          <dd>Agreed bundles must be lodged at least 72 hours before the hearing, not counting Saturdays, Sundays and
+            general holidays (PD 5.6 para 8). Enter the hearing date and the page works out the last day.</dd>
+        </dl>
+      </details>
+    </section>
     <section id="case" class="card" aria-label="Case details"></section>
     <section id="docs" class="card" aria-label="Documents"></section>
     <section id="settings" class="card" aria-label="Settings"></section>

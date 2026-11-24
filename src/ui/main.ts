@@ -16,7 +16,7 @@ import type { FileFlags, FromWorker, PlanSummary, ToWorker } from './protocol.ts
 import type { ComplianceCheck } from '../engine/compliance.ts';
 
 const VERSION = '0.4.0';
-const LS = { autosave: 'bigbundlewright:autosave', project: 'bigbundlewright:project', defaults: 'bigbundlewright:defaults', guide: 'bigbundlewright:guide-dismissed', toured: 'bigbundlewright:toured' };
+const LS = { autosave: 'bigbundlewright:autosave', project: 'bigbundlewright:project', defaults: 'bigbundlewright:defaults', guide: 'bigbundlewright:guide-dismissed', toured: 'bigbundlewright:toured', theme: 'bigbundlewright:theme' };
 
 // ---------------------------------------------------------------- worker RPC
 
@@ -26,6 +26,16 @@ const store = {
   set(k: string, v: string): boolean { try { localStorage.setItem(k, v); return true; } catch { return false; } },
   del(k: string) { try { localStorage.removeItem(k); } catch { /* storage unavailable */ } },
 };
+
+// ---------------------------------------------------------------- theme (light by default; dark optional)
+
+type Theme = 'light' | 'dark';
+function applyTheme(t: Theme) {
+  document.documentElement.dataset.theme = t;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'dark' ? '#0B1128' : '#F3F5FA');
+}
+let theme: Theme = store.get(LS.theme) === 'dark' ? 'dark' : 'light';
+applyTheme(theme);
 
 // The worker is built inline (blob: URL) so it inherits this page's Content Security Policy.
 let worker: Worker;
@@ -462,9 +472,13 @@ const $ = (id: string) => document.getElementById(id)!;
 
 function renderHeader() {
   replace($('hdr-actions'),
+    h('button', {
+      class: 'btn ghost', dataset: { key: 'theme' }, title: 'Switch between light and dark colours',
+      onclick: () => { theme = theme === 'dark' ? 'light' : 'dark'; applyTheme(theme); store.set(LS.theme, theme); renderHeader(); announce(theme === 'dark' ? 'Dark colours on.' : 'Light colours on.'); },
+    }, theme === 'dark' ? 'Light mode' : 'Dark mode'),
     h('button', { class: 'btn ghost', dataset: { key: 'tour' }, onclick: () => openTour() }, 'Tour'),
-    h('button', { class: 'btn', onclick: () => { const i = h('input', { type: 'file', accept: '.json,application/json' }); i.onchange = () => i.files?.[0] && openProject(i.files[0]); i.click(); } }, 'Open project…'),
-    h('button', { class: 'btn', onclick: saveProject, disabled: !S.project.docs.length }, 'Save project'),
+    h('button', { class: 'btn', title: 'Open a project file you saved before, then add the same PDFs again', onclick: () => { const i = h('input', { type: 'file', accept: '.json,application/json' }); i.onchange = () => i.files?.[0] && openProject(i.files[0]); i.click(); } }, 'Open project…'),
+    h('button', { class: 'btn', onclick: saveProject, disabled: !S.project.docs.length, title: 'Download the project file (your list and settings, no document contents) to continue later' }, 'Save project'),
     h('button', {
       class: 'btn ghost', onclick: async () => {
         if (S.project.docs.length && !(await confirmDialog('Start a new project?', ['This clears the current documents and details from the page. Save the project first if you will need it.'], 'Start new'))) return;
@@ -823,7 +837,7 @@ function renderBuild() {
   const sevCodes = new Set(['not-chronological', 'volume-over-limit', 'non-compliant-setting', 'core-bundle-needed', 'duplicate', 'undated', 'appended-after-issue']);
   const resultWarnings = S.results?.warnings ?? plan?.warnings ?? [];
   // Editing is locked while a build runs, so the result always matches what is on screen.
-  for (const id of ['case', 'docs', 'settings', 'hdr-actions', 'restore', 'remember', 'guide']) document.getElementById(id)?.toggleAttribute('inert', !!S.job);
+  for (const id of ['case', 'docs', 'settings', 'hdr-actions', 'restore', 'remember', 'guide', 'terms']) document.getElementById(id)?.toggleAttribute('inert', !!S.job);
   replace($('build'),
     h('h2', null, h('span', { class: 'step' }, '4'), 'Build'),
     S.planError ? h('div', { class: 'notice bad' }, S.planError) : null,
@@ -837,6 +851,12 @@ function renderBuild() {
       h('button', { class: 'btn', dataset: { key: 'b-preview' }, disabled: !ready || !!S.job, onclick: () => runBuild({ prelimsOnly: true }) }, 'Preview index'),
       h('button', { class: 'btn primary', dataset: { key: 'b-build' }, disabled: !ready || !!S.job, onclick: () => runBuild() }, 'Build bundle'),
       h('button', { class: 'btn', dataset: { key: 'b-issue' }, disabled: !ready || !!S.job, onclick: () => runBuild({ issue: true }), title: 'Build and lock the page numbers for later 88-1 inserts' }, isFrozen() ? 'Build and re-issue' : 'Build and issue…')),
+    h('ul', { class: 'btn-help' },
+      h('li', null, h('b', null, 'Preview index'), ': just the front sheet and index pages, to check them quickly.'),
+      h('li', null, h('b', null, 'Build bundle'), ': every volume with its index, plus the Word index, spine labels and a compliance report, in one ZIP.'),
+      h('li', null, h('b', null, isFrozen() ? 'Build and re-issue' : 'Build and issue'), isFrozen()
+        ? ': the same, and locks the numbers given to documents added since the last issue.'
+        : ': the same, and locks every page number, so documents added later go in as 88-1, 88-2 without renumbering. Use it when the bundle is final.')),
     S.job ? h('div', { class: 'job' },
       h('progress', { id: 'progress', max: S.job.total, value: S.job.done }),
       h('span', { id: 'progress-label' }, `${S.job.label}…`),
@@ -933,6 +953,7 @@ function tourSteps(): TourStep[] {
     {
       title: 'How Big Bundle Wright works',
       body: [p('This walk-through takes about two minutes. It goes through the four parts of the page: case details, documents, settings and build.'),
+        p('Two words first. Your project is the working list on this page: case details, documents and settings. The bundle is what you get at the end: numbered PDF files with an index, ready to lodge.'),
         p('You can follow along with your own files, or with a few example documents made on this device.')],
       actions: S.project.docs.length ? undefined : [{ label: 'Use example documents', run: loadExamples }, { label: 'Use my own files', primary: true, run: () => undefined }],
     },
@@ -969,8 +990,12 @@ function tourSteps(): TourStep[] {
     },
     {
       target: q('#hdr-actions'), title: 'Save your project',
-      body: [p('Save the project file to come back later. It holds the list, dates, descriptions and settings, never the documents themselves.'),
+      body: [p('Save the project file to come back later. It is a small file holding the list, dates, descriptions and settings, never the documents themselves.'),
         p('When you open it again, add the same files; they are recognised by their content, even if renamed.')],
+    },
+    {
+      target: q('#terms'), title: 'What the words mean',
+      body: [p('Not sure what "issue", "volume" or "core bundle" means? This section explains each term in plain English.')],
     },
     {
       title: 'That is the whole process',
