@@ -8,3 +8,5 @@ export { planProjectBundles, sortChronologically, chronologyWarnings, freezeProj
 export { buildBundle, planProject, outputBaseName, type BuildInput, type BuildOutput, type BuiltVolume } from './build.ts';
 export { serializeProject, parseProject, matchSources, describeMatch, PROJECT_SCHEMA, type SourceMatch, type SourceCandidate } from './project-io.ts';
 export { lodgingDeadline, describeDeadline } from './deadline.ts';
+export { FONT_FILES, projectNeedsCjkFonts, type FontBytes } from './fonts.ts';
+export { ZH, zhBundleName, zhPages } from './i18n.ts';

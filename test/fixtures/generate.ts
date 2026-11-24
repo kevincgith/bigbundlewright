@@ -2,10 +2,11 @@
 // Every content page carries a marker "[<key> p<n>]" so tests can prove page order.
 // SPDX-License-Identifier: MPL-2.0
 
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCanvas } from '@napi-rs/canvas';
+import fontkit from '@pdf-lib/fontkit';
 import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
 
 const A4: [number, number] = [595.28, 841.89];
@@ -14,6 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const FIXTURE_DIR = join(here, 'out');
 export const BAD_DIR = join(here, 'out-bad');
 export const EXTRA_DIR = join(here, 'out-extra');
+export const FONTS_DIR = join(here, '..', '..', 'fonts');
 
 const LOREM = 'The parties agree that the matters set out below are true and accurate to the best of their knowledge and belief, '
   + 'save where otherwise stated, and that the documents referred to are copies of the originals held by the solicitors.';
@@ -30,6 +32,24 @@ async function textDoc(key: string, title: string, pages: number, opts: { corner
     if (opts.cornerText?.includes(n)) p.drawText('REF: ABC/123/2024', { x: 470, y: 815, size: 10, font: fb });
     if (opts.edgeInk?.includes(n)) p.drawRectangle({ x: 0, y: 300, width: 40, height: 200, color: rgb(0.1, 0.1, 0.1) });
   }
+  return doc.save();
+}
+
+/** Chinese text used in the Chinese fixture page and its index description. */
+export const ZH_TEXT = {
+  title: '致被告人的信件',
+  body: '本函確認雙方已於二零二四年五月十日達成和解協議。',
+};
+
+/** A page of Traditional Chinese text, drawn with the vendored Noto Serif TC font. */
+async function chineseDoc(key: string) {
+  const doc = await PDFDocument.create();
+  doc.registerFontkit(fontkit);
+  const f = await doc.embedFont(new Uint8Array(await readFile(join(FONTS_DIR, 'NotoSerifTC-Regular.ttf'))), { subset: true });
+  const p = doc.addPage(A4);
+  p.drawText(ZH_TEXT.title, { x: 72, y: 760, size: 16, font: f });
+  p.drawText(`[${key} p1]`, { x: 72, y: 740, size: 10, font: f });
+  p.drawText(ZH_TEXT.body, { x: 72, y: 700, size: 12, font: f });
   return doc.save();
 }
 
@@ -123,6 +143,7 @@ export const EXTRA_SET: { name: string; key: string; pages: number }[] = [
   { name: 'Typed copy of agreement p1.pdf', key: 'TYPED', pages: 1 },
   { name: '2024-08-01 Further document.pdf', key: 'FURTHER', pages: 2 },
   { name: '2024-07-02 Transcript Day 2.pdf', key: 'TX2', pages: 5 },
+  { name: '2024-05-10 中文信件.pdf', key: 'ZH', pages: 1 },
 ];
 
 export async function generate() {
@@ -132,7 +153,9 @@ export async function generate() {
   await mkdir(FIXTURE_DIR, { recursive: true });
   await mkdir(BAD_DIR, { recursive: true });
   await mkdir(EXTRA_DIR, { recursive: true });
-  for (const e of EXTRA_SET) await writeFile(join(EXTRA_DIR, e.name), await textDoc(e.key, e.name.replace(/\.pdf$/, ''), e.pages));
+  for (const e of EXTRA_SET) {
+    await writeFile(join(EXTRA_DIR, e.name), e.key === 'ZH' ? await chineseDoc(e.key) : await textDoc(e.key, e.name.replace(/\.pdf$/, ''), e.pages));
+  }
   const w = (n: string, b: Uint8Array) => writeFile(join(FIXTURE_DIR, n), b);
   const letter = await textDoc('LTR', 'Letter to Defendant', 3);
   await w(MAIN_SET[0].name, await textDoc('WRIT', 'Writ of Summons', 8));

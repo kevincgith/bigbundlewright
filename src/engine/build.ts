@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { PDFDocument, degrees, rgb, type PDFPage } from 'pdf-lib';
-import { standardFontSet, type FontSet } from './fonts.ts';
+import { fontSetFor, type FontBytes, type FontSet } from './fonts.ts';
+import { ZH, bi, biColumns, zhBundleName, zhPages } from './i18n.ts';
 import { layoutIndex, type DrawOp, type IndexHeading, type IndexPageLayout, type IndexRow } from './layout-index.ts';
 import type { BuildWarning, BundleKind, PageAnalysis, Project, StampPosition } from './model.ts';
 import {
@@ -28,6 +29,12 @@ export interface BuildInput {
   issue?: boolean;
   /** Preview: build only the cover, status front sheet and index pages of each volume. */
   prelimsOnly?: boolean;
+  /**
+   * Noto TC font files (see FONT_FILES). With them, index, front sheet, label and stamp text is
+   * set in subset-embedded Noto Serif TC / Noto Sans TC, so Chinese renders and bilingual
+   * headings are available. Without them, the PDF standard fonts are used (Latin only).
+   */
+  fonts?: FontBytes;
 }
 
 export interface BuiltFile {
@@ -56,7 +63,17 @@ export interface BuildOutput {
   warnings: BuildWarning[];
   /** The project with page numbers locked, when `issue` was requested. */
   issuedProject?: Project;
+  /** Noto TC fonts were embedded (BuildInput.fonts was given). */
+  cjkFonts: boolean;
+  /** Bilingual headings were drawn (settings.bilingualHeadings and fonts given). */
+  bilingual: boolean;
 }
+
+/** Fonts plus whether to draw bilingual headings. */
+interface Typeset { fonts: FontSet; bi: boolean }
+
+/** Bilingual headings need the Chinese fonts; without them they are left out (and a warning is given). */
+export const useBilingual = (project: Project, fonts?: FontBytes) => project.settings.bilingualHeadings && !!fonts;
 
 const STAMP_SIZE = { S: 10, M: 12, L: 14 } as const;
 const STAMP_COLOUR = { black: rgb(0, 0, 0), red: rgb(0.75, 0.1, 0.1), blue: rgb(0.1, 0.2, 0.7) } as const;
@@ -69,10 +86,13 @@ function checkAbort(signal?: AbortSignal) {
   if (signal?.aborted) throw new DOMException('Build cancelled', 'AbortError');
 }
 
-function drawOps(page: PDFPage, ops: DrawOp[], fonts: FontSet) {
+export function drawOps(page: PDFPage, ops: DrawOp[], fonts: FontSet) {
   for (const op of ops) {
     if (op.t === 'text') {
-      page.drawText(op.text, { x: op.x, y: op.y, size: op.size, font: fonts[op.font], color: op.color ? rgb(...op.color) : rgb(0, 0, 0) });
+      page.drawText(op.text, {
+        x: op.x, y: op.y, size: op.size, font: fonts[op.font], color: op.color ? rgb(...op.color) : rgb(0, 0, 0),
+        ...(op.font === 'italic' && fonts.oblique ? { ySkew: degrees(12) } : {}),
+      });
     } else if (op.t === 'line') {
       const g = op.grey ?? 0;
       page.drawLine({ start: { x: op.x1, y: op.y1 }, end: { x: op.x2, y: op.y2 }, thickness: op.w, color: rgb(g, g, g) });
@@ -91,6 +111,7 @@ function safeRows(rows: IndexRow[], fonts: FontSet): IndexRow[] {
 }
 
 function heading(project: Project, fonts: FontSet, volumeLine: string, title: string, contLine: string): IndexHeading {
+  title = fonts.safe(title);
   const c = project.case;
   return {
     court: fonts.safe(c.court),
@@ -106,34 +127,39 @@ function heading(project: Project, fonts: FontSet, volumeLine: string, title: st
 }
 
 /** Lay out the unnumbered front pages of a volume: status front sheet, then index. */
-function layoutPrelims(project: Project, fonts: FontSet, kind: BundleKind, rows: PlanRow[], volName: string, range: string, xref?: CrossRef) {
+function layoutPrelims(project: Project, ts: Typeset, kind: BundleKind, rows: PlanRow[], volName: string, letter: string, range: string, xref?: CrossRef) {
   const s = project.settings;
-  const line = `${volName.toUpperCase()}  (pages ${range})`;
+  const { fonts, bi: b } = ts;
+  const line = bi(b, `${volName.toUpperCase()}  (pages ${range})`, `${zhBundleName(kind, letter, volName)}（${zhPages(range)}）`);
   const front: IndexPageLayout[] = s.frontSheet && kind !== 'transcripts'
-    ? layoutIndex(fonts, heading(project, fonts, line, 'STATUS OF DOCUMENTS (PD 5.6 para 3)', `${project.case.actionNo} — ${volName} — Status of documents (continued)`),
-      FRONT_COLUMNS, safeRows(frontSheetRows(project, rows), fonts), s.index, FRONT_LEGEND)
+    ? layoutIndex(fonts, heading(project, fonts, line, bi(b, 'STATUS OF DOCUMENTS (PD 5.6 para 3)', ZH.statusOfDocuments), `${project.case.actionNo} — ${volName} — Status of documents (continued)`),
+      biColumns(FRONT_COLUMNS, b), safeRows(frontSheetRows(project, rows, b), fonts), s.index, b ? [...FRONT_LEGEND, ZH.frontLegend] : FRONT_LEGEND)
     : [];
-  const index = layoutIndex(fonts, heading(project, fonts, line, 'INDEX', `${project.case.actionNo} — ${volName} — Index (continued)`),
-    kind === 'core' ? CORE_COLUMNS : VOLUME_COLUMNS, safeRows(indexRows(project, rows, kind === 'core' ? xref : undefined), fonts), s.index,
-    kind === 'transcripts' ? [] : STATUS_LEGEND);
+  const legend = kind === 'transcripts' ? [] : b ? [...STATUS_LEGEND, ZH.statusLegend] : STATUS_LEGEND;
+  const index = layoutIndex(fonts, heading(project, fonts, line, bi(b, 'INDEX', ZH.index), `${project.case.actionNo} — ${volName} — Index (continued)`),
+    biColumns(kind === 'core' ? CORE_COLUMNS : VOLUME_COLUMNS, b), safeRows(indexRows(project, rows, kind === 'core' ? xref : undefined, b), fonts), s.index,
+    legend);
   return { front, index };
 }
 
 /** Planner measurement uses the same fonts and layout used to draw. */
-async function makeMeasurer(project: Project): Promise<PrelimMeasurer> {
+async function makeMeasurer(project: Project, fontBytes?: FontBytes): Promise<PrelimMeasurer> {
   const scratch = await PDFDocument.create();
-  const fonts = await standardFontSet(scratch);
+  const ts: Typeset = { fonts: await fontSetFor(scratch, fontBytes), bi: useBilingual(project, fontBytes) };
   return (kind, rows, xref) => {
-    const { front, index } = layoutPrelims(project, fonts, kind, rows, kind === 'main' ? 'Bundle A' : 'Transcript Bundle A', '8888–8888', xref);
+    const { front, index } = layoutPrelims(project, ts, kind, rows, kind === 'main' ? 'Bundle A' : 'Transcript Bundle A', 'A', '8888–8888', xref);
     return coverCount(project, kind) + front.length + index.length;
   };
 }
 
 const coverCount = (project: Project, kind: BundleKind) => (kind === 'main' && project.case.coversheetFileId ? 1 : 0);
 
-/** Plan without building (e.g. to issue a project or preview volume splits). */
-export async function planProject(project: Project): Promise<BuildPlan> {
-  return planProjectBundles(project, await makeMeasurer(project));
+/**
+ * Plan without building (e.g. to issue a project or preview volume splits). Pass the same
+ * `fonts` the build will use: index length (and so the volume split) depends on the fonts.
+ */
+export async function planProject(project: Project, fonts?: FontBytes): Promise<BuildPlan> {
+  return planProjectBundles(project, await makeMeasurer(project, fonts));
 }
 
 /** Place a source page on a new A4 page (same orientation), honouring /Rotate and the crop box. */
@@ -200,6 +226,7 @@ interface VolumeContext {
   signal?: AbortSignal;
   created: Date;
   prelimsOnly?: boolean;
+  fontBytes?: FontBytes;
   notes?: Notes;
   unsupported: Set<string>;
   onPages: (n: number) => void;
@@ -217,10 +244,10 @@ async function buildVolume(ctx: VolumeContext, kind: BundleKind, bplan: BundlePl
   };
 
   const doc = await PDFDocument.create({ updateMetadata: false });
-  const fonts = await standardFontSet(doc);
+  const fonts = await fontSetFor(doc, ctx.fontBytes);
   const firstLabel = vol.pages[0].label, lastLabel = vol.pages[vol.pages.length - 1].label;
   const range = pageRange(firstLabel, lastLabel);
-  const { front, index } = layoutPrelims(project, fonts, kind, vol.rows, vol.name, range, xref);
+  const { front, index } = layoutPrelims(project, { fonts, bi: useBilingual(project, ctx.fontBytes) }, kind, vol.rows, vol.name, vol.letter, range, xref);
   const nCover = coverCount(project, kind);
   if (nCover + front.length + index.length !== vol.prelimPageCount) {
     throw new Error(`Internal error: front pages for ${vol.name} laid out to ${nCover + front.length + index.length} pages, planned ${vol.prelimPageCount}.`);
@@ -355,7 +382,7 @@ export async function buildBundle(input: BuildInput): Promise<BuildOutput> {
   const { project, signal } = input;
   const created = input.date ?? new Date();
   input.onProgress?.({ phase: 'plan', done: 0, total: 1 });
-  const plan = await planProject(project);
+  const plan = await planProject(project, input.fonts);
 
   const warnings: BuildWarning[] = [...plan.warnings];
   if (!input.analysis) warnings.push({ code: 'analysis-skipped', message: 'Page analysis was skipped: occupied corners, image-only pages and edge content were not checked.' });
@@ -372,7 +399,7 @@ export async function buildBundle(input: BuildInput): Promise<BuildOutput> {
     for (const vol of b.volumes) {
       checkAbort(signal);
       volumes.push(await buildVolume({
-        project, sources: input.sources, analysis: input.analysis, signal, created, unsupported, prelimsOnly: input.prelimsOnly,
+        project, sources: input.sources, analysis: input.analysis, signal, created, unsupported, prelimsOnly: input.prelimsOnly, fontBytes: input.fonts,
         notes: b.kind === 'core' ? undefined : notes, // core pages repeat the main bundle's
         onPages: (n) => { done += n; input.onProgress?.({ phase: 'volume', volume: vol.name, done, total: totalPages }); },
       }, b.kind, b, vol, xref));
@@ -388,7 +415,15 @@ export async function buildBundle(input: BuildInput): Promise<BuildOutput> {
     if (e.relaid.length) warnings.push({ code: 'relaid-annotations-dropped', docId, pages: e.relaid, message: `"${d.description}": page(s) ${rangesFromLabels(e.relaid)} were re-laid onto A4; links or comments on those pages were not carried over.` });
   }
   if (unsupported.size) {
-    warnings.push({ code: 'unsupported-glyph', message: `Index text contains characters the current font cannot show (${[...unsupported].join(' ')}); they were replaced with "?". Chinese index text needs the Noto TC fonts (stage 5).` });
+    warnings.push({
+      code: 'unsupported-glyph',
+      message: input.fonts
+        ? `Index text contains characters the Noto TC fonts cannot show (${[...unsupported].join(' ')}); they were replaced with "?".`
+        : `Index text contains characters the standard fonts cannot show (${[...unsupported].join(' ')}); they were replaced with "?". Chinese text needs the Noto TC fonts (BuildInput.fonts).`,
+    });
+  }
+  if (project.settings.bilingualHeadings && !input.fonts) {
+    warnings.push({ code: 'unsupported-glyph', message: 'Bilingual headings are on, but the Chinese fonts were not supplied, so the headings are in English only.' });
   }
 
   let masterIndex: BuiltFile | undefined;
@@ -396,22 +431,25 @@ export async function buildBundle(input: BuildInput): Promise<BuildOutput> {
   if (mainBuilt.length > 1 && !input.prelimsOnly) {
     checkAbort(signal);
     input.onProgress?.({ phase: 'master', done: 0, total: 1 });
-    masterIndex = await buildMasterIndex(project, plan.main, mainBuilt, created);
+    masterIndex = await buildMasterIndex(project, plan.main, mainBuilt, created, input.fonts);
   }
 
   return {
     plan, volumes, masterIndex, warnings,
     issuedProject: input.issue ? freezeProject(project, plan, created.toISOString()) : undefined,
+    cjkFonts: !!input.fonts,
+    bilingual: useBilingual(project, input.fonts),
   };
 }
 
-async function buildMasterIndex(project: Project, main: BundlePlan, built: BuiltVolume[], created: Date): Promise<BuiltFile> {
+async function buildMasterIndex(project: Project, main: BundlePlan, built: BuiltVolume[], created: Date, fontBytes?: FontBytes): Promise<BuiltFile> {
   const doc = await PDFDocument.create({ updateMetadata: false });
-  const fonts = await standardFontSet(doc);
+  const fonts = await fontSetFor(doc, fontBytes);
+  const b = useBilingual(project, fontBytes);
   const rows: IndexRow[] = [];
   const targets = new Map<string, { file: string; pageIndex: number }>();
   main.volumes.forEach((v, vi) => {
-    const vr = indexRows(project, v.rows);
+    const vr = indexRows(project, v.rows, undefined, b);
     v.rows.forEach((r, k) => {
       if (r.kind === 'section') {
         if (!r.continued) rows.push(vr[k]);
@@ -423,10 +461,11 @@ async function buildMasterIndex(project: Project, main: BundlePlan, built: Built
     });
   });
   const first = built[0], last = built[built.length - 1];
+  const range = pageRange(first.firstLabel, last.lastLabel);
   const head = heading(project, fonts,
-    `BUNDLES ${first.letter}–${last.letter}  (pages ${pageRange(first.firstLabel, last.lastLabel)})`,
-    'MASTER INDEX', `${project.case.actionNo} — Master Index (continued)`);
-  const layout = layoutIndex(fonts, head, MASTER_COLUMNS, safeRows(rows, fonts), project.settings.index, STATUS_LEGEND);
+    bi(b, `BUNDLES ${first.letter}–${last.letter}  (pages ${range})`, `${ZH.bundles}${first.letter}至${last.letter}（${zhPages(range)}）`),
+    bi(b, 'MASTER INDEX', ZH.masterIndex), `${project.case.actionNo} — Master Index (continued)`);
+  const layout = layoutIndex(fonts, head, biColumns(MASTER_COLUMNS, b), safeRows(rows, fonts), project.settings.index, b ? [...STATUS_LEGEND, ZH.statusLegend] : STATUS_LEGEND);
   layout.forEach((l) => {
     const p = doc.addPage([A4.w, A4.h]);
     drawOps(p, l.ops, fonts);
