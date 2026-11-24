@@ -57,7 +57,11 @@ async function main(argv: string[]) {
     const projPath = resolve(positionals[0] ?? 'project.json');
     const { project, warnings: loadWarnings } = parseProject(await readFile(projPath, 'utf8'));
     loadWarnings.forEach((w) => log(`  Note: ${w}`));
-    if (values.limit) project.settings.maxPagesPerVolume = Number(values.limit);
+    if (values.limit) {
+      const n = Number(values.limit);
+      if (!Number.isInteger(n) || n < 10 || n > 5000) throw new ProjectError(`--limit must be a whole number from 10 to 5000 (got "${values.limit}").`);
+      project.settings.maxPagesPerVolume = n;
+    }
     const filesDir = resolve(values.files ?? dirname(projPath));
     const outDir = resolve(values.out ?? join(dirname(projPath), 'out'));
     const { sources, notes } = await loadProjectSources(project, filesDir);

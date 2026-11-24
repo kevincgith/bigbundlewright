@@ -216,7 +216,9 @@ export type WarningCode =
   | 'appended-after-issue'
   | 'insert-before-issue'
   | 'inside-cover-labels'
-  | 'hash-mismatch';
+  | 'hash-mismatch'
+  | 'provisional-numbers'
+  | 'label-clash';
 
 export interface BuildWarning {
   code: WarningCode;

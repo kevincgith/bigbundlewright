@@ -3,11 +3,18 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {
-  PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, PDFPage, PDFRef, PDFString,
+  PDFArray, PDFDict, PDFDocument, PDFHexString, PDFString, PDFName, PDFNumber, PDFPage, PDFRef,
 } from 'pdf-lib';
 
-const isAscii = (s: string) => /^[\x20-\x7e]*$/.test(s);
-export const pdfText = (s: string) => (isAscii(s) ? PDFString.of(s) : PDFHexString.fromText(s));
+/**
+ * Text for PDF strings (bookmark titles, page-label prefixes, file names in links).
+ * Always UTF-16 hex: pdf-lib writes PDFString.of() unescaped, so "(", ")" or "\\" in a
+ * description would otherwise break the PDF syntax.
+ */
+export const pdfText = (s: string) => PDFHexString.fromText(s);
+
+/** A file name for a link (/F is a byte string): escaped literal when ASCII, else UTF-16 hex. */
+const pdfFileName = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? PDFString.of(s.replace(/[\\()]/g, (c) => `\\${c}`)) : PDFHexString.fromText(s));
 
 /** Destination: top of `page` at the viewer's current zoom. */
 export function destTop(doc: PDFDocument, page: PDFPage): PDFArray {
@@ -33,7 +40,7 @@ export function addRemoteLink(
   const ctx = doc.context;
   const action = ctx.obj({
     S: 'GoToR',
-    F: pdfText(fileName),
+    F: pdfFileName(fileName),
     D: [pageIndex, 'XYZ', 0, pageHeight, null],
     NewWindow: true,
   });

@@ -23,6 +23,88 @@ function mergeSettings(s: Partial<Settings> | undefined): Settings {
   return { ...d, ...s, stamp: { ...d.stamp, ...(s.stamp ?? {}) }, index: { ...d.index, ...(s.index ?? {}) } };
 }
 
+const isStr = (v: unknown): v is string => typeof v === 'string';
+const ENUMS: [string, (s: Settings) => unknown, readonly unknown[]][] = [
+  ['numbering', (s) => s.numbering, ['continuous', 'per-volume', 'per-section']],
+  ['sectionPrefix', (s) => s.sectionPrefix, ['', 'Section', 'Part']],
+  ['dateStyle', (s) => s.dateStyle, ['DD/MM/YYYY', 'YYYY-MM-DD', 'DD-MM-YYYY', 'MM/DD/YYYY', 'DD Mon. YYYY', 'DD Month YYYY', 'Mon. DD, YYYY', 'Month DD, YYYY', 'None']],
+  ['outlineStyle', (s) => s.outlineStyle, ['plain', 'withPage', 'withDate', 'withDateAndPage']],
+  ['stamp.style', (s) => s.stamp.style, ['X', 'PageX', 'XofY', 'XslashY', 'PageXofY', 'None']],
+  ['stamp.position', (s) => s.stamp.position, ['top-right', 'top-centre', 'top-left', 'bottom-right', 'bottom-centre', 'bottom-left']],
+  ['stamp.size', (s) => s.stamp.size, ['S', 'M', 'L']],
+  ['stamp.colour', (s) => s.stamp.colour, ['black', 'red', 'blue']],
+  ['index.headingSize', (s) => s.index.headingSize, ['S', 'M', 'L']],
+  ['index.tableSize', (s) => s.index.tableSize, ['S', 'M', 'L']],
+];
+const BOOLS: [string, (s: Settings) => unknown][] = [
+  ['sectionsEnabled', (s) => s.sectionsEnabled], ['bilingualHeadings', (s) => s.bilingualHeadings], ['printable', (s) => s.printable],
+  ['frontSheet', (s) => s.frontSheet], ['index.borders', (s) => s.index.borders],
+];
+
+/** Section letters become page-number prefixes, so they must be plain, unique ASCII letters. */
+export function validSectionLetter(letter: string): boolean {
+  return /^[A-Z]{1,3}$/.test(letter);
+}
+
+/** Types and ranges of everything the engine relies on, so a bad file fails clearly instead of crashing. */
+function validateShape(project: Project) {
+  const c = project.case as unknown as Record<string, unknown>;
+  for (const k of ['court', 'actionNo', 'shortTitle', 'bundleTitle'] as const) {
+    if (!isStr(c[k])) throw new ProjectError(`The case "${k}" must be text.`);
+  }
+  if (c.actionLine !== undefined && !isStr(c.actionLine)) throw new ProjectError('The case "actionLine" must be text.');
+  if (!Array.isArray(c.parties) || !c.parties.every((p) => p && isStr((p as { name: unknown }).name) && isStr((p as { role: unknown }).role))) {
+    throw new ProjectError('The parties must be a list of names and roles.');
+  }
+  if (c.hearingDate !== undefined && c.hearingDate !== '' && !(isStr(c.hearingDate) && isValidIsoDate(c.hearingDate))) {
+    throw new ProjectError(`The hearing date "${String(c.hearingDate)}" is not a valid date (use YYYY-MM-DD).`);
+  }
+  if (c.hearingDate === '') delete c.hearingDate;
+  const s = project.settings;
+  if (!Number.isInteger(s.maxPagesPerVolume) || s.maxPagesPerVolume < 10 || s.maxPagesPerVolume > 5000) {
+    throw new ProjectError(`The page limit per file must be a whole number from 10 to 5000 (it is "${String(s.maxPagesPerVolume)}").`);
+  }
+  for (const [name, get, ok] of ENUMS) {
+    if (!ok.includes(get(s))) throw new ProjectError(`The setting "${name}" has an unknown value "${String(get(s))}".`);
+  }
+  for (const [name, get] of BOOLS) {
+    if (typeof get(s) !== 'boolean') throw new ProjectError(`The setting "${name}" must be true or false.`);
+  }
+  if (!isStr(s.stamp.prefix)) throw new ProjectError('The page-number prefix must be text.');
+  const letters = new Set<string>();
+  const ids = new Set<string>();
+  for (const sec of project.sections) {
+    if (!sec || !isStr(sec.id) || !isStr(sec.title) || !isStr(sec.letter)) throw new ProjectError('Each section needs an id, a letter and a title.');
+    if (!validSectionLetter(sec.letter)) throw new ProjectError(`Section letter "${sec.letter}" must be 1 to 3 capital letters A-Z.`);
+    if (letters.has(sec.letter)) throw new ProjectError(`Section letter "${sec.letter}" is used twice.`);
+    if (ids.has(sec.id)) throw new ProjectError(`Section id "${sec.id}" is used twice.`);
+    letters.add(sec.letter); ids.add(sec.id);
+  }
+  for (const d of project.docs) {
+    if (!d || typeof d !== 'object') throw new ProjectError('A document entry is not valid.');
+    const name = isStr(d.description) ? `"${d.description}"` : `Document ${String(d.id)}`;
+    if (!isStr(d.id) || !isStr(d.fileId) || !isStr(d.description)) throw new ProjectError(`${name} needs an id, a file and a description.`);
+    if (d.descriptionZh !== undefined && !isStr(d.descriptionZh)) throw new ProjectError(`${name}: the Chinese description must be text.`);
+    if (d.insertAfter !== undefined && !isStr(d.insertAfter)) throw new ProjectError(`${name}: "insert after page" must be text, e.g. "88".`);
+    if (d.typedCopies !== undefined) {
+      if (!Array.isArray(d.typedCopies)) throw new ProjectError(`${name}: typed copies must be a list.`);
+      for (const t of d.typedCopies) {
+        if (!t || !isStr(t.fileId) || !Number.isInteger(t.afterPage) || t.afterPage < 1) throw new ProjectError(`${name}: each typed copy needs a file and a page number.`);
+      }
+    }
+  }
+  const fz = project.frozen as unknown as Record<string, unknown> | undefined;
+  if (fz !== undefined) {
+    const bundles = fz.bundles as Record<string, { volumes?: unknown }> | undefined;
+    const okVolumes = (b: { volumes?: unknown } | undefined) => !!b && Array.isArray(b.volumes) && b.volumes.length > 0
+      && (b.volumes as { pages?: unknown; rows?: unknown; letter?: unknown }[]).every((v) => v && isStr(v.letter) && Array.isArray(v.pages) && v.pages.length > 0 && Array.isArray(v.rows));
+    if (!isStr(fz.issuedAt) || !fz.fileHashes || typeof fz.fileHashes !== 'object' || !bundles || !okVolumes(bundles.main)
+      || (bundles.core !== undefined && !okVolumes(bundles.core)) || (bundles.transcripts !== undefined && !okVolumes(bundles.transcripts))) {
+      throw new ProjectError('The issued layout in this project file is damaged. Open an earlier copy of the project, or remove the "frozen" section to unlock and re-issue.');
+    }
+  }
+}
+
 /**
  * Parse and validate a project file. Missing settings take their defaults, so files
  * saved by older versions still open. Throws ProjectError with a readable message.
@@ -52,9 +134,11 @@ export function parseProject(text: string): { project: Project; warnings: string
     ...(raw.frozen ? { frozen: raw.frozen } : {}),
   };
 
+  validateShape(project);
+
   const fileIds = new Set<string>();
   for (const f of project.files) {
-    if (!f.id || !f.name || !/^[0-9a-f]{64}$/.test(f.sha256 ?? '') || !(f.pageCount > 0)) {
+    if (!f.id || !f.name || !/^[0-9a-f]{64}$/.test(f.sha256 ?? '') || !Number.isInteger(f.pageCount) || f.pageCount < 1) {
       throw new ProjectError(`File entry "${f.name ?? f.id ?? '?'}" is incomplete (needs id, name, sha256 and page count).`);
     }
     if (fileIds.has(f.id)) throw new ProjectError(`File id "${f.id}" appears twice.`);

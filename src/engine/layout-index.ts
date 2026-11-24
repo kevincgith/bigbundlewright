@@ -216,18 +216,31 @@ export function layoutIndex(
       continue;
     }
     const cellLines = columns.map((c, i) => wrapText(row.cells[c.key] ?? '', colW[i] - 2 * padX, font('regular'), fs));
-    const h = Math.max(...cellLines.map((l) => l.length)) * lead + 2 * padY;
+    const nLines = Math.max(...cellLines.map((l) => l.length));
+    const h = nLines * lead + 2 * padY;
     if (y - h < bottom) newPage(true);
-    columns.forEach((c, i) => {
-      cellLines[i].forEach((ln, j) => {
-        const lw = tw(ln, 'regular', fs);
-        const x = c.align === 'right' ? colX[i] + colW[i] - padX - lw
-          : c.align === 'center' ? colX[i] + (colW[i] - lw) / 2 : colX[i] + padX;
-        text(ln, x, y - padY - fs * 0.85 - j * lead, fs, 'regular');
+    // A row taller than the space left (very long description) continues on the next page.
+    let from = 0;
+    let firstChunk = true;
+    while (from < nLines) {
+      let fit = Math.floor((y - bottom - 2 * padY) / lead);
+      if (fit < 1) { newPage(true); fit = Math.floor((y - bottom - 2 * padY) / lead); }
+      const take = Math.min(nLines - from, fit);
+      const ch = take * lead + 2 * padY;
+      columns.forEach((c, i) => {
+        cellLines[i].slice(from, from + take).forEach((ln, j) => {
+          const lw = tw(ln, 'regular', fs);
+          const x = c.align === 'right' ? colX[i] + colW[i] - padX - lw
+            : c.align === 'center' ? colX[i] + (colW[i] - lw) / 2 : colX[i] + padX;
+          text(ln, x, y - padY - fs * 0.85 - j * lead, fs, 'regular');
+        });
       });
-    });
-    if (row.linkKey) page.links.push({ key: row.linkKey, rect: [MARGIN, y - h, PW - MARGIN, y] });
-    y -= h;
+      if (row.linkKey && firstChunk) page.links.push({ key: row.linkKey, rect: [MARGIN, y - ch, PW - MARGIN, y] });
+      y -= ch;
+      from += take;
+      firstChunk = false;
+      if (from < nLines) newPage(true);
+    }
     if (style.borders) page.ops.push({ t: 'line', x1: MARGIN, y1: y, x2: PW - MARGIN, y2: y, w: 0.4, grey: 0.5 });
   }
 

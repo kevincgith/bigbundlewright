@@ -1,5 +1,6 @@
 // Big Bundle Wright build plugin: Content Security Policy.
 // GitHub Pages cannot send custom headers, so the policy is a <meta> tag in the built page.
+// The worker is built inline and started from a blob: URL, so it inherits this policy too.
 // SPDX-License-Identifier: MPL-2.0
 import type { Plugin } from 'vite';
 
@@ -10,7 +11,7 @@ export const CSP = [
   "img-src 'self' blob: data:",
   "font-src 'self'",
   "connect-src 'self'",
-  "worker-src 'self'",
+  "worker-src 'self' blob:",
   "frame-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'none'",

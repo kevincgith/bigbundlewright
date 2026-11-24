@@ -287,6 +287,8 @@ interface PackOptions {
   /** Continue filling this volume first (used when appending after issue). */
   initial?: Draft;
   sectionsSeen?: Set<string>;
+  /** Widest label this bundle is likely to use; index rows are measured with it until real labels exist. */
+  labelHint: string;
 }
 
 /**
@@ -315,7 +317,9 @@ function packDocs(project: Project, docs: BundleDoc[], o: PackOptions): Draft[] 
       const secRow: PlanSectionRow | null = secId !== undefined && cur.lastSectionId !== secId
         ? { kind: 'section', sectionId: secId, continued: sectionsSeen.has(secId) }
         : null;
-      const entry: PlanEntry = { kind: 'doc', docId: d.id, tab: String(tab), first: 0, count: 0, firstLabel: '', lastLabel: '' };
+      const entry: PlanEntry = { kind: 'doc', docId: d.id, tab: String(tab), first: 0, count: 0, firstLabel: o.labelHint, lastLabel: o.labelHint };
+      // A continuing part carries "(part n of m)": measure with it (m unknown yet, so a wide placeholder).
+      if (partNo > 0) entry.part = { n: partNo + 1, of: 99 };
       const rowsWith = [...cur.rows, ...(secRow ? [secRow] : []), entry];
       const prelim = o.measure(o.kind, rowsWith);
 
@@ -331,7 +335,6 @@ function packDocs(project: Project, docs: BundleDoc[], o: PackOptions): Draft[] 
       };
 
       if (cur.pages.length + remaining.length + blank + prelim <= o.limit) {
-        if (partNo > 0) entry.part = { n: partNo + 1, of: 0 };
         place(remaining, blank === 1);
         remaining = [];
         break;
@@ -339,7 +342,7 @@ function packDocs(project: Project, docs: BundleDoc[], o: PackOptions): Draft[] 
       if (cur.hasDocs) { close(); continue; }
       // Empty volume and the document still does not fit: split it.
       partNo++;
-      entry.part = { n: partNo, of: 0 };
+      entry.part = { n: partNo, of: 99 };
       const cap = o.limit - o.measure(o.kind, rowsWith);
       if (cap < 1) throw new ProjectError(`The page limit (${o.limit}) is too small to fit even the index of a volume.`);
       place(remaining.slice(0, cap), false);
@@ -358,13 +361,18 @@ function packDocs(project: Project, docs: BundleDoc[], o: PackOptions): Draft[] 
 
 // ---------- labelling ----------
 
-const LABEL_RE = /^([A-Za-z]*)(\d+)(?:-(\d+))?$/;
+/** The page's number within its series ("C12" in series "C" → 12), or null for inserted pages ("88-1"). */
+function baseNumber(p: PlanPage): number | null {
+  if (!p.label.startsWith(p.series)) return null;
+  const rest = p.label.slice(p.series.length);
+  return /^\d+$/.test(rest) ? +rest : null;
+}
 
 function seriesFor(project: Project, kind: BundleKind, prefix: string, volLetter: string, docId?: string): string {
   if (kind !== 'main') return prefix;
   const s = project.settings;
   if (s.numbering === 'per-volume') return volLetter;
-  if (s.numbering === 'per-section') {
+  if (s.numbering === 'per-section' && s.sectionsEnabled) {
     const d = project.docs.find((x) => x.id === docId);
     return project.sections.find((x) => x.id === d?.sectionId)?.letter ?? '';
   }
@@ -375,8 +383,8 @@ function seriesFor(project: Project, kind: BundleKind, prefix: string, volLetter
 function labelNewPages(project: Project, kind: BundleKind, prefix: string, vols: { letter: string; pages: PlanPage[] }[]) {
   const counters = new Map<string, number>();
   for (const v of vols) for (const p of v.pages) {
-    const m = LABEL_RE.exec(p.label);
-    if (m && !m[3]) counters.set(p.series, Math.max(counters.get(p.series) ?? 0, +m[2]));
+    const n = baseNumber(p);
+    if (n !== null) counters.set(p.series, Math.max(counters.get(p.series) ?? 0, n));
   }
   for (const v of vols) for (const p of v.pages) {
     if (p.label) continue;
@@ -405,18 +413,20 @@ function refreshEntries(v: { rows: PlanRow[]; pages: PlanPage[] }) {
 }
 
 function finalize(project: Project, kind: BundleKind, vols: { letter: string; rows: PlanRow[]; pages: PlanPage[] }[],
-  measure: PrelimMeasurer, warnings: BuildWarning[]): BundlePlan {
+  measure: PrelimMeasurer, warnings: BuildWarning[], fixedNames?: Map<string, string>): BundlePlan {
   const seriesTotals: Record<string, number> = {};
   for (const v of vols) {
     refreshEntries(v);
     for (const p of v.pages) {
-      const m = LABEL_RE.exec(p.label);
-      if (m && !m[3]) seriesTotals[p.series] = Math.max(seriesTotals[p.series] ?? 0, +m[2]);
+      if (p.kind !== 'doc' && p.kind !== 'blank') continue;
+      const n = baseNumber(p);
+      if (n !== null) seriesTotals[p.series] = Math.max(seriesTotals[p.series] ?? 0, n);
     }
   }
   const volumes = vols.map((v, i): PlanVolume => {
     const prelimPageCount = measure(kind, v.rows);
-    const name = bundleName(kind, v.letter, vols.length);
+    // After issue, volume names never change ("Core Bundle" stays; a new one is "Core Bundle B").
+    const name = fixedNames?.get(v.letter) ?? bundleName(kind, v.letter, fixedNames ? Math.max(2, vols.length) : vols.length);
     const total = prelimPageCount + v.pages.length;
     if (total > project.settings.maxPagesPerVolume) {
       warnings.push({ code: 'volume-over-limit', message: `${name} has ${total} pages, over the ${project.settings.maxPagesPerVolume}-page limit (PD 5.6 para 5). After issue, pages cannot be moved without renumbering; consider re-issuing the bundle or lodging the extra pages in a supplementary file.` });
@@ -426,9 +436,21 @@ function finalize(project: Project, kind: BundleKind, vols: { letter: string; ro
   return { kind, volumes, seriesTotals };
 }
 
+/** A label at least as wide as any this bundle will use, so the index is never measured too short. */
+function labelHint(project: Project, kind: BundleKind, prefix: string, extraPages: number, docs: BundleDoc[]): string {
+  const s = project.settings;
+  const pages = extraPages + docs.reduce((a, d) => a + docPageRefs(project, d).length + 1, 0);
+  const digits = Math.max(4, String(pages).length);
+  const letters = kind !== 'main' ? prefix.length
+    : s.numbering === 'per-volume' ? 2
+    : s.numbering === 'per-section' && s.sectionsEnabled ? Math.max(1, ...project.sections.map((x) => x.letter.length))
+    : 0;
+  return `${'W'.repeat(letters)}${'8'.repeat(digits)}`;
+}
+
 function planFresh(project: Project, kind: BundleKind, docs: BundleDoc[], prefix: string,
   measure: PrelimMeasurer, warnings: BuildWarning[]): BundlePlan {
-  const drafts = packDocs(project, docs, { kind, measure, limit: project.settings.maxPagesPerVolume, tabStart: 0 });
+  const drafts = packDocs(project, docs, { kind, measure, limit: project.settings.maxPagesPerVolume, tabStart: 0, labelHint: labelHint(project, kind, prefix, 0, docs) });
   const vols = drafts.map((d, i) => ({ letter: volumeLetter(i), rows: d.rows, pages: d.pages }));
   labelNewPages(project, kind, prefix, vols);
   for (const v of vols) for (const r of v.rows) {
@@ -544,7 +566,8 @@ function planFrozen(project: Project, kind: BundleKind, frozen: FrozenLayout, do
     const sectionsSeen = new Set(vols.flatMap((v) => v.rows).filter((r): r is PlanSectionRow => r.kind === 'section').map((r) => r.sectionId));
     const lastSection = [...last.rows].reverse().find((r): r is PlanSectionRow => r.kind === 'section');
     const initial: Draft = { letter: last.letter, rows: last.rows, pages: last.pages, hasDocs: true, lastSectionId: lastSection?.sectionId };
-    const drafts = packDocs(project, appends, { kind, measure, limit: project.settings.maxPagesPerVolume, tabStart, sectionsSeen, initial });
+    const existing = vols.reduce((a, v) => a + v.pages.length, 0);
+    const drafts = packDocs(project, appends, { kind, measure, limit: project.settings.maxPagesPerVolume, tabStart, sectionsSeen, initial, labelHint: labelHint(project, kind, prefix, existing, appends) });
     // drafts[0] is `initial` (the last issued volume, extended in place); the rest are new volumes.
     for (const d of drafts.slice(1)) vols.push({ letter: volumeLetter(vols.length), rows: d.rows, pages: d.pages });
     labelNewPages(project, kind, prefix, vols);
@@ -553,13 +576,31 @@ function planFrozen(project: Project, kind: BundleKind, frozen: FrozenLayout, do
       const pages = vols.flatMap((v) => v.pages).filter((p) => p.docId === d.id);
       const range = pageRange(pages[0].label, pages[pages.length - 1].label);
       const late = d.date && lastDated && d.date < lastDated;
+      const where = kind === 'main' ? '' : `${kind === 'core' ? 'Core Bundle' : 'Transcript Bundle'} `;
       warnings.push({
         code: 'appended-after-issue', docId: d.id,
-        message: `"${d.description}" was added after issue with no "insert after" page, so it is placed at the end (${kind === 'main' ? '' : `${bundleName(kind, '', 1)} `}pages ${range})${late ? ' and is out of chronological order. To place it in date order, set the page it should follow (it will be numbered like 88-1)' : ''}.`,
+        message: kind !== 'main' && d.insertAfter
+          ? `"${d.description}" is placed at the end of the ${where.trim()} (pages ${range}); its "insert after" page ${d.insertAfter} applies to the main bundle.`
+          : `"${d.description}" was added after issue with no "insert after" page, so it is placed at the end (${where}pages ${range})${late ? ' and is out of chronological order. To place it in date order, set the page it should follow (it will be numbered like 88-1)' : ''}.`,
       });
     }
   }
-  return finalize(project, kind, vols, measure, warnings);
+
+  // Pages added since issue are numbered from the current list, so they are provisional until re-issued.
+  const added = [...inserts.map((i) => i.doc), ...appends];
+  if (added.length) {
+    const ranges = [...new Set(added.map((d) => d.id))].map((id) => {
+      const pages = vols.flatMap((v) => v.pages).filter((p) => p.docId === id && !frozenDocIds.has(id) || (p.docId === id && /-\d+$/.test(p.label)));
+      const doc = allDocs.get(id)!;
+      return pages.length ? `"${doc.description}" ${pageRange(pages[0].label, pages[pages.length - 1].label)}` : '';
+    }).filter(Boolean);
+    warnings.push({
+      code: 'provisional-numbers',
+      message: `Pages added since the ${kind === 'main' ? 'bundle' : kind === 'core' ? 'core bundle' : 'transcript bundle'} was issued (${ranges.join('; ')}) are numbered provisionally: their numbers can change if other late documents are added, removed or reordered. Use "Build and re-issue" before lodging them, to lock the numbers.`,
+    });
+  }
+  const fixedNames = new Map(fb.volumes.map((v) => [v.letter, bundleName(kind, v.letter, fb.volumes.length)]));
+  return finalize(project, kind, vols, measure, warnings, fixedNames);
 }
 
 /** Labels already used by the main bundle's series, to pick a non-clashing core/transcript prefix. */
@@ -567,9 +608,21 @@ function pickPrefix(want: string, alt: string, used: Set<string>) {
   return used.has(want) ? alt : want;
 }
 
+/** The prefix an issued core/transcript bundle already uses (e.g. "C" or "CB"). */
+function issuedPrefix(frozen: FrozenLayout | undefined, kind: BundleKind): string | undefined {
+  return frozen?.bundles[kind]?.volumes.flatMap((v) => v.pages).find((p) => p.kind === 'doc' && baseNumber(p) !== null)?.series;
+}
+
 export function planProjectBundles(project: Project, measure: PrelimMeasurer): BuildPlan {
   const s = project.settings;
+  const limit = s.maxPagesPerVolume;
+  if (!Number.isInteger(limit) || limit < 10 || limit > 5000) {
+    throw new ProjectError(`The page limit per file must be a whole number from 10 to 5000 (it is "${limit}").`);
+  }
   const warnings: BuildWarning[] = [];
+  if (s.numbering === 'per-section' && !s.sectionsEnabled) {
+    warnings.push({ code: 'non-compliant-setting', message: 'Numbering is set to restart in each section, but sections are off, so pages are numbered consecutively instead.' });
+  }
   const frozen = project.frozen;
   const mainDocs = orderedDocs(project);
   const transcriptDocs = project.docs.filter((d) => d.type === 'transcript');
@@ -602,19 +655,29 @@ export function planProjectBundles(project: Project, measure: PrelimMeasurer): B
   let core: BundlePlan | undefined;
   const xref = crossRefs(main);
   const coreMeasure: PrelimMeasurer = (k, rows) => measure(k, rows, xref);
+  const corePrefix = issuedPrefix(frozen, 'core') ?? pickPrefix('C', 'CB', used);
+  const txPrefix = issuedPrefix(frozen, 'transcripts') ?? pickPrefix('T', 'TB', used);
   if (frozen?.bundles.core) {
-    core = planFrozen(project, 'core', frozen, coreDocs, pickPrefix('C', 'CB', used), coreMeasure, warnings);
+    core = planFrozen(project, 'core', frozen, coreDocs, corePrefix, coreMeasure, warnings);
   } else if (coreDocs.length) {
-    core = planFresh(project, 'core', coreDocs, pickPrefix('C', 'CB', used), coreMeasure, warnings);
+    core = planFresh(project, 'core', coreDocs, corePrefix, coreMeasure, warnings);
   } else if (docPages > 100) {
     warnings.push({ code: 'core-bundle-needed', message: `The agreed bundle has ${docPages} pages of documents. PD 5.6 para 2 says a core bundle should be prepared where it exceeds 100 pages: tag the core documents.` });
   }
 
   let transcripts: BundlePlan | undefined;
   if (frozen?.bundles.transcripts) {
-    transcripts = planFrozen(project, 'transcripts', frozen, transcriptDocs, pickPrefix('T', 'TB', used), measure, warnings);
+    transcripts = planFrozen(project, 'transcripts', frozen, transcriptDocs, txPrefix, measure, warnings);
   } else if (transcriptDocs.length) {
-    transcripts = planFresh(project, 'transcripts', transcriptDocs, pickPrefix('T', 'TB', used), measure, warnings);
+    transcripts = planFresh(project, 'transcripts', transcriptDocs, txPrefix, measure, warnings);
+  }
+  for (const [b, pre] of [[core, corePrefix], [transcripts, txPrefix]] as const) {
+    if (b && used.has(pre)) {
+      warnings.push({ code: 'label-clash', message: `The main bundle now has page numbers starting "${pre}", the same as the ${b.kind === 'core' ? 'core' : 'transcript'} bundle (issued before the new volume was added). Re-issue the bundle so the numbers are unique.` });
+    }
+  }
+  if (frozen && /of|slash/i.test(s.stamp.style)) {
+    warnings.push({ code: 'non-compliant-setting', message: 'With "X of Y" style page numbers, the "of Y" total on issued pages changes when pages are added after issue. Use plain numbers to keep issued pages unchanged.' });
   }
 
   const physicalFiles = main.volumes.length + (core?.volumes.length ?? 0) + (transcripts?.volumes.length ?? 0);

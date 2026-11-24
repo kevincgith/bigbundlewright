@@ -144,7 +144,6 @@ details[open] > summary .summary-cue::after { content: "Hide"; }
 .normal { font-weight: 400; font-family: var(--sans); }
 details > summary h2 { flex-wrap: wrap; }
 .linkish-summary { color: var(--navy-2); text-decoration: underline; width: max-content; margin: 6px 0; }
-.compliance table td:nth-child(3) { white-space: nowrap; }
 
 /* Documents table becomes stacked cards on narrow screens. */
 .linkbtn { text-align: left; }
@@ -170,3 +169,11 @@ details > summary h2 { flex-wrap: wrap; }
   table.docs select { max-width: none; width: 100%; }
   .tablewrap { overflow: visible; }
 }
+
+.placement { font-size: 12.5px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+table.report { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.report th { text-align: left; font: 600 13px var(--sans); color: var(--navy); border-bottom: 2px solid var(--navy); padding: 6px; background: #f6f3ec; }
+table.report td { border-bottom: 1px solid var(--rule); padding: 6px; vertical-align: top; }
+table.report tr.oo td { background: var(--warn-bg); }
+table.report td:nth-child(3) { white-space: nowrap; }
+.reportwrap { overflow-x: auto; }

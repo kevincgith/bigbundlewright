@@ -133,7 +133,7 @@ export const EDGE_MARGIN = 14.17;
  * Fit a visual page (w × h, already rotated) onto A4 in the same orientation.
  * With `clearStamp`, the content is shrunk just enough to leave the stamp strip clear.
  */
-export function fitToA4(w: number, h: number, clearStamp = false): Fit {
+export function fitToA4(w: number, h: number, clearStamp = false, edge: 'top' | 'bottom' = 'top'): Fit {
   const landscape = w > h;
   const outW = landscape ? A4.h : A4.w;
   const outH = landscape ? A4.w : A4.h;
@@ -144,7 +144,9 @@ export function fitToA4(w: number, h: number, clearStamp = false): Fit {
   const availH = outH - STAMP_ZONE.h;
   scale = Math.min(scale, availH / h);
   const x = (outW - w * scale) / 2;
-  const y = Math.max(0, availH - h * scale) / 2;
+  // Centre the content in the part of the page the stamp does not use.
+  const gap = Math.max(0, availH - h * scale) / 2;
+  const y = edge === 'top' ? gap : STAMP_ZONE.h + gap;
   return { outW, outH, scale, x, y };
 }
 

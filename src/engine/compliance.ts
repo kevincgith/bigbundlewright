@@ -58,7 +58,8 @@ const DISCLAIMER = 'A formatting check, not legal advice. You are responsible fo
 export function complianceReport(project: Project, out: BuildOutput, opts: ComplianceOptions = {}): ComplianceReport {
   const { plan, warnings } = out;
   const now = opts.date ?? new Date();
-  const today = now.toISOString().slice(0, 10);
+  // The court works on Hong Kong time: "today" is the HK calendar date, not UTC.
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
   const has = (...codes: WarningCode[]) => warnings.filter((w) => codes.includes(w.code));
   const codesOf = (ws: BuildWarning[]) => [...new Set(ws.map((w) => w.code))];
   const checks: ComplianceCheck[] = [];
@@ -74,7 +75,7 @@ export function complianceReport(project: Project, out: BuildOutput, opts: Compl
   const dup = has('duplicate');
   add('no-duplicates', '1', 'No unnecessary or duplicated documents', dup.length ? 'warning' : 'pass',
     dup.length ? `${dup.length} set(s) of files with identical content.` : 'No two files have identical content. Check for unnecessary documents yourself.', dup);
-  const late = has('insert-before-issue', 'appended-after-issue');
+  const late = has('insert-before-issue', 'appended-after-issue', 'provisional-numbers', 'label-clash');
   add('additional-docs', '1', 'Additional documents inserted as 88-1, 88-2… without renumbering',
     late.length ? 'warning' : project.frozen ? 'pass' : 'not-applicable',
     late.length ? late.map((w) => w.message).join(' ')

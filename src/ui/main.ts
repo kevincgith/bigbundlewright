@@ -5,11 +5,12 @@ import './styles.css';
 import logoUrl from '../../assets/logo/glass-horizontal.svg?url';
 import {
   DEFAULT_SETTINGS, chronologyWarnings, describeDeadline, lodgingDeadline, parseFileName, parseProject,
-  serializeProject, unfreezeProject, outputBaseName, PROJECT_SCHEMA,
+  serializeProject, unfreezeProject, outputBaseName, validSectionLetter, PROJECT_SCHEMA,
   type BundleDoc, type BuildWarning, type DocStatus, type DocType, type Project, type Settings, type SourceFileRef,
 } from '../engine/index.ts';
 import { orderedDocs } from '../engine/plan.ts';
 import { announce, download, h, replace, uid } from './dom.ts';
+import BundleWorker from './worker.ts?worker&inline';
 import type { FileFlags, FromWorker, PlanSummary, ToWorker } from './protocol.ts';
 import type { ComplianceCheck } from '../engine/compliance.ts';
 
@@ -18,13 +19,50 @@ const LS = { autosave: 'bigbundlewright:autosave', project: 'bigbundlewright:pro
 
 // ---------------------------------------------------------------- worker RPC
 
-const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+/** localStorage that never throws (it does when a browser blocks site data). */
+const store = {
+  get(k: string): string | null { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k: string, v: string): boolean { try { localStorage.setItem(k, v); return true; } catch { return false; } },
+  del(k: string) { try { localStorage.removeItem(k); } catch { /* storage unavailable */ } },
+};
+
+// The worker is built inline (blob: URL) so it inherits this page's Content Security Policy.
+let worker: Worker;
 const pending = new Map<string, { resolve: (m: FromWorker) => void; reject: (e: WorkerError) => void; progress?: (m: Extract<FromWorker, { type: 'progress' }>) => void }>();
 interface WorkerError { name: string; code?: string; fileName?: string; message: string }
 
-worker.onmessage = (e: MessageEvent<FromWorker>) => {
+function startWorker() {
+  worker = new BundleWorker();
+  worker.onmessage = onWorkerMessage;
+  worker.onerror = (e) => { e.preventDefault?.(); workerDied(); };
+  worker.onmessageerror = () => workerDied();
+  worker.postMessage({ type: 'init', base: new URL('.', document.baseURI).href } satisfies ToWorker);
+}
+
+/** The worker crashed (for example out of memory): fail everything pending and start again. */
+function workerDied() {
+  const err: WorkerError = { name: 'WorkerError', message: 'The background worker stopped, possibly because it ran out of memory. Add the files again to continue.' };
+  for (const p of pending.values()) p.reject(err);
+  pending.clear();
+  try { worker.terminate(); } catch { /* already gone */ }
+  S.job = null;
+  S.ingesting = 0;
+  S.loaded.clear();
+  S.flags.clear();
+  for (const f of S.project.files) reopened.add(f.id);
+  startWorker();
+  renderAll();
+  showError('Something went wrong', err);
+}
+
+function onWorkerMessage(e: MessageEvent<FromWorker>) {
   const m = e.data;
-  if (m.type === 'fonts') { S.fontsState = m.state; renderBuild(); return; }
+  if (m.type === 'fonts') {
+    S.fontsState = m.state;
+    if (m.state === 'failed') announce('The Chinese fonts could not be loaded.');
+    renderBuild();
+    return;
+  }
   if (m.type === 'analysed' || m.type === 'analysis-failed') {
     S.flags.set(m.sha, m.type === 'analysed' ? m.flags : null);
     if (m.type === 'analysis-failed') { S.analysisErrors.set(m.sha, m.message); console.warn('Page check failed:', m.message); }
@@ -36,7 +74,7 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
   if (m.type === 'progress') { p.progress?.(m); return; }
   pending.delete(m.reqId);
   if (m.type === 'error') p.reject(m); else p.resolve(m);
-};
+}
 
 function call<T extends FromWorker['type']>(msg: ToWorker, progress?: (m: Extract<FromWorker, { type: 'progress' }>) => void, transfer: Transferable[] = []): Promise<Extract<FromWorker, { type: T }>> {
   return new Promise((resolve, reject) => {
@@ -50,7 +88,7 @@ function call<T extends FromWorker['type']>(msg: ToWorker, progress?: (m: Extrac
 function defaultSettings(): Settings {
   const d = structuredClone(DEFAULT_SETTINGS);
   try {
-    const saved = JSON.parse(localStorage.getItem(LS.defaults) ?? 'null');
+    const saved = JSON.parse(store.get(LS.defaults) ?? 'null');
     if (saved) return { ...d, ...saved, stamp: { ...d.stamp, ...saved.stamp }, index: { ...d.index, ...saved.index } };
   } catch { /* ignore */ }
   return d;
@@ -97,6 +135,9 @@ const S = {
   /** Rows where the Chinese description box has been opened. */
   zhOpen: new Set<string>(),
   fontsState: '' as '' | 'loading' | 'ready' | 'failed',
+  /** Bumped on every edit; a build whose revision is stale is not shown. */
+  rev: 0,
+  settingsOpen: false,
 };
 
 const DOC_TYPES: [DocType, string][] = [['document', 'Document'], ['pleading', 'Pleading'], ['witness_statement', 'Witness statement'], ['expert', 'Expert report'], ['correspondence', 'Correspondence'], ['transcript', 'Transcript']];
@@ -106,10 +147,44 @@ const fileById = (id: string) => S.project.files.find((f) => f.id === id);
 const docPages = (d: BundleDoc) => (fileById(d.fileId)?.pageCount ?? 0) + (d.typedCopies ?? []).reduce((a, t) => a + (fileById(t.fileId)?.pageCount ?? 0), 0);
 const missingFiles = () => S.project.files.filter((f) => !S.loaded.has(f.sha256));
 const isFrozen = () => !!S.project.frozen;
-const frozenDocIds = () => new Set(Object.values(S.project.frozen?.bundles ?? {}).flatMap((b) => b?.volumes.flatMap((v) => v.pages.map((p) => p.docId)) ?? []));
+const frozenPages = () => Object.values(S.project.frozen?.bundles ?? {}).flatMap((b) => b?.volumes.flatMap((v) => v.pages) ?? []);
+const frozenDocIds = () => new Set(frozenPages().map((p) => p.docId));
+/** "docId|fileId" pairs fixed by the issued layout (typed copies included). */
+const frozenFilePairs = () => new Set(frozenPages().map((p) => `${p.docId}|${p.fileId}`));
+const sel$ = (key: string) => `[data-key="${CSS.escape(key)}"]`;
+
+/** Drop file entries nothing refers to any more, and tell the worker to free their bytes. */
+function pruneFiles() {
+  const p = S.project;
+  const used = new Set<string>();
+  for (const d of p.docs) { used.add(d.fileId); for (const t of d.typedCopies ?? []) used.add(t.fileId); }
+  if (p.case.coversheetFileId) used.add(p.case.coversheetFileId);
+  for (const id of Object.keys(p.frozen?.fileHashes ?? {})) used.add(id);
+  const removed = p.files.filter((f) => !used.has(f.id));
+  if (!removed.length) return;
+  p.files = p.files.filter((f) => used.has(f.id));
+  for (const f of removed) {
+    reopened.delete(f.id);
+    if (!p.files.some((g) => g.sha256 === f.sha256)) {
+      S.loaded.delete(f.sha256);
+      S.flags.delete(f.sha256);
+      worker.postMessage({ type: 'forget', sha: f.sha256 } satisfies ToWorker);
+    }
+  }
+}
+
+/** Light edit (typing): stale results go, the plan refreshes. */
+function edited() {
+  S.rev++;
+  if (S.results) { clearResults(); renderBuild(); }
+  autosave();
+  schedulePlan();
+}
 
 function changed(opts: { docs?: boolean; build?: boolean } = {}) {
-  S.results = null;
+  S.rev++;
+  pruneFiles();
+  clearResults();
   renderHeader();
   if (opts.docs !== false) renderDocs();
   if (opts.build !== false) renderBuild();
@@ -146,8 +221,10 @@ type Purpose = { kind: 'doc' } | { kind: 'typed'; docId: string; afterPage: numb
 
 async function addFiles(list: FileList | File[], purpose: Purpose = { kind: 'doc' }) {
   const files = [...list];
+  if (S.job) { announce('Wait for the build to finish before adding files.'); return; }
   S.ingesting += files.length;
   renderDocs();
+  renderBuild();
   for (const file of files) {
     try {
       const bytes = await file.arrayBuffer();
@@ -156,6 +233,7 @@ async function addFiles(list: FileList | File[], purpose: Purpose = { kind: 'doc
     } catch (e) {
       const err = e as WorkerError;
       S.fileErrors.push({ name: file.name, message: err.message ?? String(e) });
+      announce(err.message ?? String(e));
     } finally {
       S.ingesting--;
     }
@@ -176,6 +254,7 @@ function onIngested(ref: SourceFileRef, purpose: Purpose) {
   const fileRef = { ...ref, id };
   p.files.push(fileRef);
   if (purpose.kind === 'cover') { p.case.coversheetFileId = id; renderCase(); return; }
+  if (purpose.kind === 'typed' && !p.docs.some((x) => x.id === purpose.docId)) return; // document removed meanwhile; pruned on next change
   if (purpose.kind === 'typed') {
     const d = p.docs.find((x) => x.id === purpose.docId);
     if (d) (d.typedCopies ??= []).push({ afterPage: purpose.afterPage, fileId: id });
@@ -233,16 +312,21 @@ function adoptProject(project: Project) {
   reopened.clear();
   for (const f of project.files) if (!S.loaded.has(f.sha256)) reopened.add(f.id);
   S.fileErrors = [];
-  S.results = null;
+  clearResults();
+  S.rev++;
+  pruneFiles();
   renderAll();
   schedulePlan();
+  autosave();
 }
 
 let autosaveTimer = 0;
 function autosave() {
-  if (localStorage.getItem(LS.autosave) !== '1') return;
+  if (store.get(LS.autosave) !== '1') return;
   clearTimeout(autosaveTimer);
-  autosaveTimer = window.setTimeout(() => localStorage.setItem(LS.project, serializeProject(S.project)), 400);
+  autosaveTimer = window.setTimeout(() => {
+    if (store.get(LS.autosave) === '1') store.set(LS.project, serializeProject(S.project));
+  }, 400);
 }
 
 // ---------------------------------------------------------------- planning (live compliance preview)
@@ -258,9 +342,12 @@ function schedulePlan() {
       const r = await call<'planned'>({ type: 'plan', reqId: uid('r'), project: S.project });
       if (seq !== planSeq) return;
       S.plan = r.summary; S.planError = '';
+      renderDocs();
     } catch (e) {
       if (seq !== planSeq) return;
-      S.plan = null; S.planError = (e as WorkerError).message;
+      const msg = (e as WorkerError).message;
+      if (msg !== S.planError) announce(msg);
+      S.plan = null; S.planError = msg;
     }
     renderBuild();
   }, 450);
@@ -293,15 +380,24 @@ async function runBuild(opts: { issue?: boolean; prelimsOnly?: boolean } = {}) {
     'Issuing locks every page number. After this, late documents are added as 88-1, 88-2… (PD 5.6 para 1) and nothing can be removed without re-issuing.',
     'Save the project file afterwards: you need it to add documents later.',
   ], 'Build and issue'))) return;
+  if (S.job || S.ingesting) return;
   clearResults();
   const reqId = uid('r');
+  const startRev = S.rev;
   S.job = { label: 'Starting', done: 0, total: 1 };
   renderBuild();
+  announce('Building.');
   try {
     const r = await call<'built'>({ type: 'build', reqId, project: S.project, issue: opts.issue, prelimsOnly: opts.prelimsOnly }, (p) => {
+      if (S.job && p.phase !== S.job.label) announce(p.phase);
       S.job = { label: p.phase, done: p.done, total: p.total };
       updateProgress();
     });
+    if (S.rev !== startRev) {
+      // Editing is locked during a build, so this should not happen; never show results for a changed project.
+      announce('The project changed during the build; build again.');
+      return;
+    }
     const mime = (n: string) => n.endsWith('.pdf') ? 'application/pdf' : n.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : n.endsWith('.json') ? 'application/json' : 'application/octet-stream';
     S.results = {
       preview: !!opts.prelimsOnly,
@@ -345,10 +441,11 @@ const confirmDialog = async (title: string, lines: string[], ok: string) =>
   (await dialog(title, [h('ul', null, ...lines.map((l) => h('li', null, l)))], [{ label: 'Go back', value: 'no' }, { label: ok, value: 'yes', primary: true }])) === 'yes';
 const showMessage = (title: string, lines: string[]) => dialog(title, [h('ul', null, ...lines.map((l) => h('li', null, l)))], [{ label: 'OK', value: 'ok', primary: true }]);
 
-function showError(title: string, err: { name?: string; message: string; stack?: string }) {
+function showError(title: string, err: { name?: string; code?: string; message: string; stack?: string }) {
+  // The message can contain document names, so the copied details leave it out.
   const details = [
     `Big Bundle Wright ${VERSION}`, `Browser: ${navigator.userAgent}`,
-    `Error: ${err.name ?? 'Error'}: ${err.message}`,
+    `Error: ${err.name ?? 'Error'}${err.code ? ` (${err.code})` : ''}`,
     `Documents: ${S.project.docs.length}, files: ${S.project.files.length}, pages: ${S.project.files.reduce((a, f) => a + f.pageCount, 0)}, issued: ${isFrozen()}`,
   ].join('\n');
   dialog(title, [h('p', null, err.message),
@@ -376,11 +473,11 @@ function renderHeader() {
 
 function renderGuide() {
   const el = $('guide');
-  if (localStorage.getItem(LS.guide) === '1') { el.hidden = true; return; }
+  if (store.get(LS.guide) === '1') { el.hidden = true; return; }
   el.hidden = false;
   replace(el,
     h('div', { class: 'guide-head' }, h('h2', null, 'Before you start: PD 5.6 in brief'),
-      h('button', { class: 'btn ghost small', onclick: () => { localStorage.setItem(LS.guide, '1'); renderGuide(); } }, 'Hide')),
+      h('button', { class: 'btn ghost small', onclick: () => { store.set(LS.guide, '1'); renderGuide(); } }, 'Hide')),
     h('ul', { class: 'guide' },
       h('li', null, h('strong', null, 'Leave out unnecessary documents'), ' — only those likely to be referred to at trial (para 1).'),
       h('li', null, h('strong', null, 'Chronological order'), ', paged consecutively in the top right-hand corner (para 4).'),
@@ -400,7 +497,7 @@ function textInput(key: string, value: string, onInput: (v: string) => void, att
 
 function renderCase() {
   const c = S.project.case;
-  const set = () => { autosave(); schedulePlan(); renderDeadline(); };
+  const set = () => { edited(); renderDeadline(); };
   const courtSel = h('select', {
     dataset: { key: 'court-preset' },
     onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; if (COURTS[v]) { c.court = v ? COURTS[v] : c.court; renderCase(); set(); } },
@@ -413,7 +510,7 @@ function renderCase() {
       textInput(`pn${i}`, p.name, (v) => { p.name = v; set(); }, { placeholder: 'Name (as in the title of the action)', 'aria-label': `Party ${i + 1} name` }),
       textInput(`pr${i}`, p.role, (v) => { p.role = v; set(); }, { placeholder: 'Role', class: 'role', 'aria-label': `Party ${i + 1} role` }),
       h('button', { class: 'btn ghost small', 'aria-label': `Remove party ${i + 1}`, onclick: () => { c.parties.splice(i, 1); renderCase(); set(); } }, '×'))),
-    h('div', null, h('button', { class: 'btn small', onclick: () => { c.parties.push({ name: '', role: 'Defendant' }); renderCase(); requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-key="pn${c.parties.length - 1}"]`)?.focus()); } }, 'Add party')));
+    h('div', null, h('button', { class: 'btn small', onclick: () => { c.parties.push({ name: '', role: 'Defendant' }); renderCase(); requestAnimationFrame(() => document.querySelector<HTMLElement>(sel$(`pn${c.parties.length - 1}`))?.focus()); } }, 'Add party')));
 
   const cover = c.coversheetFileId ? fileById(c.coversheetFileId) : undefined;
   replace($('case'),
@@ -432,8 +529,8 @@ function renderCase() {
       h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Confidentiality'),
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!c.confidential, onchange: (e: Event) => { c.confidential = (e.target as HTMLInputElement).checked; set(); } }), 'Mark the bundle as confidential (shown in red on the index)')),
       h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Cover page (optional)'),
-        cover ? h('span', null, cover.name, ' ', h('button', { class: 'linkbtn danger', onclick: () => { delete c.coversheetFileId; renderCase(); changed(); } }, 'Remove'))
-          : h('span', null, h('button', { class: 'btn small', onclick: () => pickFiles({ kind: 'cover' }, false) }, 'Choose a cover page…'), h('span', { class: 'hint' }, ' The first page of the file goes before the index, unnumbered.')))));
+        cover ? h('span', null, cover.name, ' ', h('button', { class: 'linkbtn danger', dataset: { key: 'cover-remove' }, onclick: () => { delete c.coversheetFileId; changed(); renderCase(); } }, 'Remove'))
+          : h('span', null, h('button', { class: 'btn small', dataset: { key: 'cover-add' }, onclick: () => pickFiles({ kind: 'cover' }, false) }, 'Choose a cover page…'), h('span', { class: 'hint' }, ' The first page of the file goes before the index, unnumbered.')))));
   renderDeadline();
 }
 
@@ -462,7 +559,7 @@ function moveDoc(id: string, to: number) {
   docs.splice(to, 0, d);
   changed();
   announce(`Moved "${d.description}" to position ${to + 1} of ${docs.length}.`);
-  requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-key="handle-${id}"]`)?.focus());
+  requestAnimationFrame(() => document.querySelector<HTMLElement>(sel$(`handle-${id}`))?.focus());
 }
 
 function sortByDate() {
@@ -481,6 +578,8 @@ function docRow(d: BundleDoc, i: number, warn: Map<string, string>, frozenIds: S
   const isNew = frozen && !frozenIds.has(d.id);
   const n = S.project.docs.length;
   const dateText = S.dateDraft.get(d.id) ?? toDisplay(d.date);
+  const locked = frozen && frozenIds.has(d.id);
+  const lockedPairs = frozen ? frozenFilePairs() : new Set<string>();
   const notes: (string | Node)[] = [];
   if (missing) notes.push(h('span', { class: 'badge bad' }, 'File needed'));
   if (!d.date && !S.dateDraft.has(d.id)) notes.push(h('span', { class: 'badge warn', title: 'Add a date so the document can be placed in chronological order.' }, 'No date'));
@@ -490,28 +589,38 @@ function docRow(d: BundleDoc, i: number, warn: Map<string, string>, frozenIds: S
   if (f && S.project.files.some((g) => g.id !== f.id && g.sha256 === f.sha256)) notes.push(h('span', { class: 'badge warn' }, 'Duplicate'));
   if (f && fl === undefined && S.loaded.has(f.sha256)) notes.push(h('span', { class: 'badge muted' }, 'Checking…'));
   if (f && fl === null) notes.push(h('span', { class: 'badge warn', title: S.analysisErrors.get(f.sha256) ?? '' }, 'Pages not checked'));
-  for (const t of d.typedCopies ?? []) notes.push(h('span', { class: 'badge' }, `Typed copy after p. ${t.afterPage} `, h('button', { class: 'linkish', 'aria-label': 'Remove typed copy', onclick: () => { d.typedCopies = d.typedCopies!.filter((x) => x !== t); changed(); } }, '×')));
+  for (const t of d.typedCopies ?? []) {
+    const fixed = lockedPairs.has(`${d.id}|${t.fileId}`);
+    notes.push(h('span', { class: 'badge' }, `Typed copy after p. ${t.afterPage}`,
+      fixed ? null : [' ', h('button', { class: 'linkish', 'aria-label': `Remove typed copy after page ${t.afterPage}`, dataset: { key: `tcrm-${d.id}-${t.fileId}` }, onclick: () => { d.typedCopies = d.typedCopies!.filter((x) => x !== t); changed(); } }, '×')]));
+  }
 
   const tr = h('tr', {
     class: `${warn.get(d.id) ? 'oo' : ''} ${isNew ? 'new' : ''}`, dataset: { id: d.id },
-    draggable: S.reorder === 'drag' ? 'true' : null,
+    draggable: S.reorder === 'drag' && !locked ? 'true' : null,
     ondragstart: (e: DragEvent) => { dragId = d.id; e.dataTransfer?.setData('text/plain', d.id); tr.classList.add('dragging'); },
     ondragend: () => { dragId = null; tr.classList.remove('dragging'); },
-    ondragover: (e: DragEvent) => { if (dragId) { e.preventDefault(); tr.classList.add('over'); } },
+    ondragover: (e: DragEvent) => { e.preventDefault(); if (dragId) tr.classList.add('over'); },
     ondragleave: () => tr.classList.remove('over'),
-    ondrop: (e: DragEvent) => { e.preventDefault(); tr.classList.remove('over'); if (dragId) moveDoc(dragId, i); },
+    ondrop: (e: DragEvent) => {
+      e.preventDefault(); tr.classList.remove('over');
+      if (dragId) moveDoc(dragId, i);
+      else if (e.dataTransfer?.files.length) addFiles(e.dataTransfer.files); // files dropped on the list are added too
+    },
   },
   h('td', { class: 'handle-cell' },
     h('button', {
-      class: 'handle', dataset: { key: `handle-${d.id}` }, 'aria-label': `Reorder "${d.description}". Use Alt plus arrow keys to move.`,
-      title: 'Drag, or press Alt+↑ / Alt+↓', onkeydown: (e: KeyboardEvent) => {
+      class: 'handle', dataset: { key: `handle-${d.id}` }, disabled: locked,
+      'aria-label': locked ? `"${d.description}" is fixed by the issued bundle` : `Reorder "${d.description}". Use Alt plus arrow keys to move.`,
+      title: locked ? 'Fixed by the issued bundle' : 'Drag, or press Alt+↑ / Alt+↓', onkeydown: (e: KeyboardEvent) => {
+        if (locked) return;
         if (e.altKey && e.key === 'ArrowUp') { e.preventDefault(); moveDoc(d.id, i - 1); }
         if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); moveDoc(d.id, i + 1); }
       },
     }, '⠿'),
     S.reorder === 'arrows' ? h('span', { class: 'arrows' },
-      h('button', { class: 'btn ghost small', disabled: i === 0, 'aria-label': 'Move up', onclick: () => moveDoc(d.id, i - 1) }, '▲'),
-      h('button', { class: 'btn ghost small', disabled: i === n - 1, 'aria-label': 'Move down', onclick: () => moveDoc(d.id, i + 1) }, '▼')) : null),
+      h('button', { class: 'btn ghost small', disabled: locked || i === 0, 'aria-label': `Move "${d.description}" up`, dataset: { key: `up-${d.id}` }, onclick: () => moveDoc(d.id, i - 1) }, '▲'),
+      h('button', { class: 'btn ghost small', disabled: locked || i === n - 1, 'aria-label': `Move "${d.description}" down`, dataset: { key: `down-${d.id}` }, onclick: () => moveDoc(d.id, i + 1) }, '▼')) : null),
   h('td', { class: 'num', dataset: { label: 'No.' } }, String(i + 1)),
   h('td', { class: 'datecell', dataset: { label: 'Date' } }, h('input', {
     type: 'text', class: `date ${S.dateDraft.has(d.id) ? 'invalid' : ''}`, value: dateText, placeholder: 'DD/MM/YYYY', dataset: { key: `date-${d.id}` },
@@ -524,23 +633,24 @@ function docRow(d: BundleDoc, i: number, warn: Map<string, string>, frozenIds: S
     },
   })),
   h('td', { class: 'desc', dataset: { label: 'Description' } },
-    h('input', { type: 'text', value: d.description, dataset: { key: `desc-${d.id}` }, 'aria-label': `Description of document ${i + 1}`, oninput: (e: Event) => { d.description = (e.target as HTMLInputElement).value; autosave(); schedulePlan(); } }),
+    h('input', { type: 'text', value: d.description, dataset: { key: `desc-${d.id}` }, 'aria-label': `Description of document ${i + 1}`, oninput: (e: Event) => { d.description = (e.target as HTMLInputElement).value; edited(); } }),
     d.descriptionZh !== undefined || S.zhOpen.has(d.id)
-      ? h('input', { type: 'text', class: 'zh', lang: 'zh-Hant', value: d.descriptionZh ?? '', placeholder: '中文描述', dataset: { key: `zh-${d.id}` }, 'aria-label': `Chinese description of document ${i + 1}`, oninput: (e: Event) => { const v = (e.target as HTMLInputElement).value; d.descriptionZh = v || undefined; if (!v) S.zhOpen.add(d.id); autosave(); schedulePlan(); } })
+      ? h('input', { type: 'text', class: 'zh', lang: 'zh-Hant', value: d.descriptionZh ?? '', placeholder: '中文描述', dataset: { key: `zh-${d.id}` }, 'aria-label': `Chinese description of document ${i + 1}`, oninput: (e: Event) => { const v = (e.target as HTMLInputElement).value; d.descriptionZh = v || undefined; if (!v) S.zhOpen.add(d.id); edited(); } })
       : null,
     notes.length ? h('div', { class: 'notes' }, ...notes) : null,
+    S.plan?.placement[d.id] ? h('div', { class: 'placement' }, S.plan.placement[d.id]) : null,
     isNew ? h('div', { class: 'insert' }, h('label', null, 'Insert after page ', h('input', {
       type: 'text', class: 'short', value: d.insertAfter ?? '', placeholder: 'e.g. 88', dataset: { key: `ins-${d.id}` },
       onchange: (e: Event) => { d.insertAfter = (e.target as HTMLInputElement).value.trim() || undefined; changed(); },
     })), h('span', { class: 'hint' }, ' Numbered 88-1, 88-2… Leave blank to add at the end.')) : null,
     h('div', { class: 'rowactions' },
       d.descriptionZh === undefined && !S.zhOpen.has(d.id)
-        ? h('button', { class: 'linkbtn', onclick: () => { S.zhOpen.add(d.id); renderDocs(); requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-key="zh-${d.id}"]`)?.focus()); } }, 'Add Chinese description') : null,
-      h('button', { class: 'linkbtn', title: 'Attach a typed copy of an illegible page (PD 5.6 para 6)', onclick: () => askTyped(d) }, 'Attach typed copy'),
+        ? h('button', { class: 'linkbtn', dataset: { key: `zhadd-${d.id}` }, onclick: () => { S.zhOpen.add(d.id); renderDocs(); requestAnimationFrame(() => document.querySelector<HTMLElement>(sel$(`zh-${d.id}`))?.focus()); } }, 'Add Chinese description') : null,
+      h('button', { class: 'linkbtn', dataset: { key: `typed-${d.id}` }, title: 'Attach a typed copy of an illegible page (PD 5.6 para 6)', onclick: () => askTyped(d) }, 'Attach typed copy'),
       h('button', {
-        class: 'linkbtn danger', 'aria-label': `Remove "${d.description}"`, disabled: frozen && frozenIds.has(d.id),
-        title: frozen && frozenIds.has(d.id) ? 'Issued documents cannot be removed without re-issuing' : '',
-        onclick: () => { S.project.docs = S.project.docs.filter((x) => x.id !== d.id); S.project.files = S.project.files.filter((f2) => f2.id !== d.fileId || S.project.docs.some((x) => x.fileId === f2.id)); changed(); announce(`Removed "${d.description}".`); },
+        class: 'linkbtn danger', dataset: { key: `rm-${d.id}` }, 'aria-label': `Remove "${d.description}"`, disabled: locked,
+        title: locked ? 'Issued documents cannot be removed without re-issuing' : '',
+        onclick: () => { S.project.docs = S.project.docs.filter((x) => x.id !== d.id); changed(); announce(`Removed "${d.description}".`); },
       }, 'Remove'))),
   h('td', { dataset: { label: 'Type' } }, h('select', { 'aria-label': `Type of document ${i + 1}`, dataset: { key: `type-${d.id}` }, onchange: (e: Event) => { d.type = (e.target as HTMLSelectElement).value as DocType; changed(); } },
     ...DOC_TYPES.map(([v, l]) => h('option', { value: v, selected: d.type === v }, l)))),
@@ -590,20 +700,20 @@ function renderDocs() {
     h('h2', null, h('span', { class: 'step' }, '2'), 'Documents'),
     isFrozen() ? h('div', { class: 'notice' }, h('strong', null, `Issued ${new Date(S.project.frozen!.issuedAt).toLocaleDateString('en-GB')}. `),
       'Page numbers are locked. New documents go in after a page you choose and are numbered 88-1, 88-2… (PD 5.6 para 1).',
-      ' ', h('button', { class: 'btn ghost small', onclick: async () => { if (await confirmDialog('Unlock page numbers?', ['The whole bundle will be renumbered on the next build. Only do this if you will re-issue and re-lodge the bundle.'], 'Unlock')) { S.project = unfreezeProject(S.project); changed(); renderAll(); } } }, 'Unlock…')) : null,
+      ' ', h('button', { class: 'btn ghost small', dataset: { key: 'unlock' }, onclick: async () => { if (await confirmDialog('Unlock page numbers?', ['The whole bundle will be renumbered on the next build. Only do this if you will re-issue and re-lodge the bundle.'], 'Unlock')) { S.project = unfreezeProject(S.project); changed(); renderAll(); } } }, 'Unlock…')) : null,
     missing.length ? h('div', { class: 'notice warn' }, h('strong', null, 'Add these files again to continue: '), missing.map((f) => f.name).join(', '),
       h('span', { class: 'hint' }, ' They are recognised by content, so the file names can differ. If a file has changed, it will be added as a new document instead.')) : null,
     drop,
-    S.fileErrors.length ? h('div', { class: 'notice bad', role: 'alert' },
+    S.fileErrors.length ? h('div', { class: 'notice bad' },
       h('ul', null, ...S.fileErrors.map((e) => h('li', null, e.message))),
-      h('button', { class: 'btn ghost small', onclick: () => { S.fileErrors = []; renderDocs(); } }, 'Dismiss')) : null,
+      h('button', { class: 'btn ghost small', dataset: { key: 'errors-dismiss' }, onclick: () => { S.fileErrors = []; renderDocs(); } }, 'Dismiss')) : null,
     p.docs.length ? h('div', { class: 'toolbar' },
-      h('button', { class: 'btn small', onclick: sortByDate, disabled: isFrozen() }, 'Sort by date'),
-      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: p.settings.sectionsEnabled, onchange: (e: Event) => { p.settings.sectionsEnabled = (e.target as HTMLInputElement).checked; if (p.settings.sectionsEnabled && !p.sections.length) p.sections.push({ id: uid('s'), letter: 'A', title: 'Pleadings' }); changed(); renderSettings(); } }), 'Use sections'),
-      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S.reorder === 'arrows', onchange: (e: Event) => { S.reorder = (e.target as HTMLInputElement).checked ? 'arrows' : 'drag'; renderDocs(); } }), 'Show move buttons'),
+      h('button', { class: 'btn small', dataset: { key: 'sort' }, onclick: sortByDate, disabled: isFrozen() }, 'Sort by date'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', dataset: { key: 'sections-toggle' }, checked: p.settings.sectionsEnabled, onchange: (e: Event) => { p.settings.sectionsEnabled = (e.target as HTMLInputElement).checked; if (p.settings.sectionsEnabled && !p.sections.length) p.sections.push({ id: uid('s'), letter: 'A', title: 'Pleadings' }); changed(); renderSettings(); } }), 'Use sections'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', dataset: { key: 'arrows-toggle' }, checked: S.reorder === 'arrows', onchange: (e: Event) => { S.reorder = (e.target as HTMLInputElement).checked ? 'arrows' : 'drag'; renderDocs(); } }), 'Show move buttons'),
       h('span', { class: 'spacer' }),
       h('span', { class: 'muted' }, `${p.docs.length} document(s), ${total} page(s)`),
-      h('button', { class: 'btn ghost small', disabled: isFrozen(), onclick: async () => { if (await confirmDialog('Remove all documents?', ['This removes every document from the list.'], 'Remove all')) { p.docs = []; p.files = []; changed(); } } }, 'Clear all')) : null,
+      h('button', { class: 'btn ghost small', dataset: { key: 'clear-all' }, disabled: isFrozen(), onclick: async () => { if (await confirmDialog('Remove all documents?', ['This removes every document from the list (the case details and cover page stay).'], 'Remove all')) { S.project.docs = []; S.zhOpen.clear(); S.dateDraft.clear(); changed(); } } }, 'Clear all')) : null,
     p.settings.sectionsEnabled ? renderSections() : null,
     p.docs.length ? h('div', { class: 'tablewrap' }, h('table', { class: 'docs' },
       h('thead', null, h('tr', null,
@@ -621,10 +731,26 @@ function renderSections() {
   return h('div', { class: 'sections' },
     h('span', { class: 'lbl' }, 'Sections (in order):'),
     ...p.sections.map((s, i) => h('span', { class: 'section' },
-      h('input', { type: 'text', class: 'short', value: s.letter, 'aria-label': 'Section letter', dataset: { key: `sl-${s.id}` }, onchange: (e: Event) => { s.letter = (e.target as HTMLInputElement).value.trim() || s.letter; changed(); } }),
-      h('input', { type: 'text', value: s.title, 'aria-label': 'Section title', dataset: { key: `stt-${s.id}` }, onchange: (e: Event) => { s.title = (e.target as HTMLInputElement).value; changed(); } }),
+      h('input', {
+        type: 'text', class: 'short', value: s.letter, maxlength: 3, 'aria-label': `Letter of section ${i + 1} (capital letters A-Z)`, dataset: { key: `sl-${s.id}` },
+        onchange: (e: Event) => {
+          const v = (e.target as HTMLInputElement).value.trim().toUpperCase();
+          if (!validSectionLetter(v)) { announce('Section letters must be 1 to 3 capital letters A-Z.'); renderDocs(); return; }
+          if (p.sections.some((x) => x !== s && x.letter === v)) { announce(`Section letter ${v} is already used.`); renderDocs(); return; }
+          s.letter = v; changed();
+        },
+      }),
+      h('input', { type: 'text', value: s.title, 'aria-label': `Title of section ${i + 1}`, dataset: { key: `stt-${s.id}` }, onchange: (e: Event) => { s.title = (e.target as HTMLInputElement).value; changed(); } }),
       h('button', { class: 'btn ghost small', 'aria-label': `Remove section ${s.letter}`, onclick: () => { p.sections.splice(i, 1); p.docs.forEach((d) => { if (d.sectionId === s.id) delete d.sectionId; }); changed(); } }, '×'))),
-    h('button', { class: 'btn small', onclick: () => { p.sections.push({ id: uid('s'), letter: String.fromCharCode(65 + p.sections.length), title: '' }); changed(); } }, 'Add section'));
+    h('button', {
+      class: 'btn small', dataset: { key: 'add-section' }, onclick: () => {
+        let n = 0; let letter = 'A';
+        const used = new Set(p.sections.map((x) => x.letter));
+        // Next free letter: A…Z, then AA, AB…
+        do { letter = n < 26 ? String.fromCharCode(65 + n) : String.fromCharCode(64 + Math.floor(n / 26)) + String.fromCharCode(65 + (n % 26)); n++; } while (used.has(letter));
+        p.sections.push({ id: uid('s'), letter, title: '' }); changed();
+      },
+    }, 'Add section'));
 }
 
 // ---------------------------------------------------------------- rendering: settings
@@ -641,11 +767,12 @@ function renderSettings() {
   const s = S.project.settings;
   const st = s.stamp;
   replace($('settings'),
-    h('details', null, h('summary', null, h('h2', null, h('span', { class: 'step' }, '3'), 'Settings', h('span', { class: 'summary-cue' }, ''), h('span', { class: 'muted small normal' }, 'Defaults follow PD 5.6; change only if needed.'))),
+    h('details', { open: S.settingsOpen || null, ontoggle: (e: Event) => { S.settingsOpen = (e.target as HTMLDetailsElement).open; } }, h('summary', null, h('h2', null, h('span', { class: 'step' }, '3'), 'Settings', h('span', { class: 'summary-cue' }, ''), h('span', { class: 'muted small normal' }, 'Defaults follow PD 5.6; change only if needed.'))),
       h('div', { class: 'grid3' },
         h('fieldset', null, h('legend', null, 'Volumes and numbering'),
           field('Pages per file', h('input', { type: 'number', min: 20, max: 1000, value: s.maxPagesPerVolume, onchange: (e: Event) => { s.maxPagesPerVolume = Math.max(20, Number((e.target as HTMLInputElement).value) || 250); changed({ docs: false }); } }), 'PD 5.6 para 5: never more than 250.'),
-          sel('Numbering', s.numbering, [['continuous', 'Consecutive across all files (1, 2, 3…)'], ['per-volume', 'Restart each file (A1, B1…)'], ['per-section', 'Restart each section (A1, B1…)']], (v) => { s.numbering = v; }),
+          sel('Numbering', s.numbering, [['continuous', 'Consecutive across all files (1, 2, 3…)'], ['per-volume', 'Restart each file (A1, B1…)'], ...(s.sectionsEnabled || s.numbering === 'per-section' ? [['per-section', 'Restart each section (A1, B1…)'] as ['per-section', string]] : [])], (v) => { s.numbering = v; },
+            s.sectionsEnabled ? undefined : 'Turn on "Use sections" (Documents) to restart numbering in each section.'),
           sel('Section label', s.sectionPrefix, [['Section', '"Section A"'], ['Part', '"Part A"'], ['', '"A"']], (v) => { s.sectionPrefix = v; }),
           chk('Status front sheet (PD 5.6 para 3)', s.frontSheet, (v) => { s.frontSheet = v; }),
           chk('Printable: blank page after odd-length documents', s.printable, (v) => { s.printable = v; })),
@@ -664,9 +791,9 @@ function renderSettings() {
           chk('English and 繁體中文 headings', s.bilingualHeadings, (v) => { s.bilingualHeadings = v; }),
           h('p', { class: 'hint' }, 'Chinese text loads extra fonts (about 27 MB, once). Have the Chinese headings checked before lodging.'))),
       h('div', { class: 'row' },
-        h('button', { class: 'btn small', onclick: () => { localStorage.setItem(LS.defaults, JSON.stringify(s)); announce('Saved as your defaults on this device.'); } }, 'Save as my defaults'),
-        h('button', { class: 'btn ghost small', onclick: () => { localStorage.removeItem(LS.defaults); announce('Saved defaults erased.'); } }, 'Erase saved defaults'),
-        h('button', { class: 'btn ghost small', onclick: () => { S.project.settings = structuredClone(DEFAULT_SETTINGS); renderSettings(); changed(); } }, 'Reset to PD 5.6 defaults'))));
+        h('button', { class: 'btn small', onclick: () => { announce(store.set(LS.defaults, JSON.stringify(s)) ? 'Saved as your defaults on this device.' : 'This browser does not allow saving settings.'); } }, 'Save as my defaults'),
+        h('button', { class: 'btn ghost small', onclick: () => { store.del(LS.defaults); announce('Saved defaults erased.'); } }, 'Erase saved defaults'),
+        h('button', { class: 'btn ghost small', onclick: () => { S.project.settings = structuredClone(DEFAULT_SETTINGS); renderSettings(); changed(); announce('Settings reset to the PD 5.6 defaults.'); } }, 'Reset to PD 5.6 defaults'))));
 }
 
 // ---------------------------------------------------------------- rendering: build
@@ -688,23 +815,25 @@ function renderBuild() {
   const plan = S.plan;
   const sevCodes = new Set(['not-chronological', 'volume-over-limit', 'non-compliant-setting', 'core-bundle-needed', 'duplicate', 'undated', 'appended-after-issue']);
   const resultWarnings = S.results?.warnings ?? plan?.warnings ?? [];
+  // Editing is locked while a build runs, so the result always matches what is on screen.
+  for (const id of ['case', 'docs', 'settings', 'hdr-actions', 'restore', 'remember', 'guide']) document.getElementById(id)?.toggleAttribute('inert', !!S.job);
   replace($('build'),
     h('h2', null, h('span', { class: 'step' }, '4'), 'Build'),
-    S.planError ? h('div', { class: 'notice bad', role: 'alert' }, S.planError) : null,
+    S.planError ? h('div', { class: 'notice bad' }, S.planError) : null,
     plan ? h('div', { class: 'plan' },
       h('p', null, h('strong', null, `${plan.physicalFiles} file${plan.physicalFiles > 1 ? 's' : ''}: `),
         plan.volumes.map((v) => `${v.name} (pp. ${v.first}–${v.last}, ${v.pages} pages in all)`).join('; '), '.')) : null,
     !ready && !S.job ? h('p', { class: 'hint' }, !p.docs.length ? 'Add documents to build the bundle.' : missingFiles().length ? 'Add the missing files again (see Documents) to build.' : 'Reading files…') : null,
-    S.fontsState === 'loading' ? h('p', { class: 'hint', role: 'status' }, 'Loading Chinese fonts (about 27 MB, once per visit)…') : null,
-    S.fontsState === 'failed' ? h('p', { class: 'warn', role: 'alert' }, 'The Chinese fonts could not be loaded; check the connection and try again.') : null,
+    S.fontsState === 'loading' ? h('p', { class: 'hint' }, 'Loading Chinese fonts (about 27 MB, once per visit)…') : null,
+    S.fontsState === 'failed' ? h('p', { class: 'warn' }, 'The Chinese fonts could not be loaded; check the connection and try again.') : null,
     h('div', { class: 'row' },
-      h('button', { class: 'btn', disabled: !ready || !!S.job, onclick: () => runBuild({ prelimsOnly: true }) }, 'Preview index'),
-      h('button', { class: 'btn primary', disabled: !ready || !!S.job, onclick: () => runBuild() }, 'Build bundle'),
-      h('button', { class: 'btn', disabled: !ready || !!S.job, onclick: () => runBuild({ issue: true }), title: 'Build and lock the page numbers for later 88-1 inserts' }, isFrozen() ? 'Build and re-issue' : 'Build and issue…')),
-    S.job ? h('div', { class: 'job', role: 'status' },
+      h('button', { class: 'btn', dataset: { key: 'b-preview' }, disabled: !ready || !!S.job, onclick: () => runBuild({ prelimsOnly: true }) }, 'Preview index'),
+      h('button', { class: 'btn primary', dataset: { key: 'b-build' }, disabled: !ready || !!S.job, onclick: () => runBuild() }, 'Build bundle'),
+      h('button', { class: 'btn', dataset: { key: 'b-issue' }, disabled: !ready || !!S.job, onclick: () => runBuild({ issue: true }), title: 'Build and lock the page numbers for later 88-1 inserts' }, isFrozen() ? 'Build and re-issue' : 'Build and issue…')),
+    S.job ? h('div', { class: 'job' },
       h('progress', { id: 'progress', max: S.job.total, value: S.job.done }),
       h('span', { id: 'progress-label' }, `${S.job.label}…`),
-      h('button', { class: 'btn small', onclick: () => worker.postMessage({ type: 'cancel' } satisfies ToWorker) }, 'Cancel')) : null,
+      h('button', { class: 'btn small', dataset: { key: 'b-cancel' }, onclick: () => { worker.postMessage({ type: 'cancel' } satisfies ToWorker); announce('Cancelling.'); } }, 'Cancel')) : null,
     S.results ? h('div', { class: 'results' },
       h('h3', null, S.results.preview ? 'Index preview' : 'Your bundle'),
       S.results.zip ? h('p', { class: 'row' },
@@ -718,12 +847,12 @@ function renderBuild() {
           f.fileName.endsWith('.pdf') ? [' ', h('a', { href: f.url, target: '_blank', rel: 'noopener', class: 'small' }, 'Open')] : null)))),
       S.results.checks ? h('div', { class: 'compliance' },
         h('h3', null, 'PD 5.6 compliance report'),
-        h('table', { class: 'docs' },
+        h('div', { class: 'reportwrap' }, h('table', { class: 'report' },
           h('thead', null, h('tr', null, h('th', null, 'Para'), h('th', null, 'Requirement'), h('th', null, 'Result'), h('th', null, 'Detail'))),
           h('tbody', null, ...S.results.checks.map((c) => h('tr', { class: c.status === 'warning' ? 'oo' : '' },
             h('td', null, c.para), h('td', null, c.requirement),
             h('td', null, h('span', { class: `badge ${c.status === 'warning' ? 'warn' : c.status === 'pass' ? '' : 'muted'}` }, c.status === 'pass' ? 'Pass' : c.status === 'warning' ? 'Warning' : 'Not applicable')),
-            h('td', { class: 'small' }, c.detail)))))) : null,
+            h('td', { class: 'small' }, c.detail))))))) : null,
       !S.results.preview ? h('div', { class: 'row' },
         h('button', { class: 'btn small', onclick: saveProject }, 'Save project file'),
         h('span', { class: 'muted small' }, 'The ZIP already contains the project file.')) : null) : null,
@@ -736,20 +865,26 @@ function renderBuild() {
 // ---------------------------------------------------------------- footer, autosave prompt
 
 function renderFooter() {
-  const on = localStorage.getItem(LS.autosave) === '1';
+  const on = store.get(LS.autosave) === '1';
   replace($('remember'),
     h('label', { class: 'check' }, h('input', {
       type: 'checkbox', checked: on, onchange: (e: Event) => {
-        if ((e.target as HTMLInputElement).checked) { localStorage.setItem(LS.autosave, '1'); autosave(); }
-        else { localStorage.removeItem(LS.autosave); localStorage.removeItem(LS.project); }
-        announce('Saved.');
+        if ((e.target as HTMLInputElement).checked) {
+          if (!store.set(LS.autosave, '1')) { (e.target as HTMLInputElement).checked = false; announce('This browser does not allow saving project details.'); return; }
+          autosave();
+          announce('Project details will be remembered in this browser.');
+        } else {
+          clearTimeout(autosaveTimer);
+          store.del(LS.autosave); store.del(LS.project);
+          announce('Remembered project details erased.');
+        }
       },
     }), 'Remember project details in this browser'),
     h('span', { class: 'hint' }, ' Stores only the list, dates, descriptions and settings on this device, never document contents. Untick to erase.'));
 }
 
 function offerRestore() {
-  const saved = localStorage.getItem(LS.autosave) === '1' ? localStorage.getItem(LS.project) : null;
+  const saved = store.get(LS.autosave) === '1' ? store.get(LS.project) : null;
   if (!saved) return;
   try {
     const { project } = parseProject(saved);
@@ -767,6 +902,7 @@ function renderAll() {
 
 // ---------------------------------------------------------------- boot
 
+startWorker();
 (document.getElementById('logo') as HTMLImageElement).src = logoUrl;
 // Keep a dropped file from opening in the tab if it misses the drop zone.
 window.addEventListener('dragover', (e) => { if (!dragId) e.preventDefault(); });

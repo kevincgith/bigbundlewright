@@ -9,13 +9,17 @@ export interface PlanSummary {
   volumes: { kind: BundleKind; name: string; first: string; last: string; pages: number }[];
   warnings: BuildWarning[];
   physicalFiles: number;
+  /** Doc id → where it lands, e.g. "Bundle A, pages 39–158". */
+  placement: Record<string, string>;
 }
 
 export type ToWorker =
   | { type: 'ingest'; reqId: string; tempId: string; name: string; bytes: ArrayBuffer }
   | { type: 'plan'; reqId: string; project: Project }
   | { type: 'build'; reqId: string; project: Project; issue?: boolean; prelimsOnly?: boolean }
-  | { type: 'cancel' };
+  | { type: 'cancel' }
+  | { type: 'init'; base: string }
+  | { type: 'forget'; sha: string };
 
 export type FromWorker =
   | { type: 'ingested'; reqId: string; ref: SourceFileRef }

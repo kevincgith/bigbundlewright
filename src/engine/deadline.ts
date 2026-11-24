@@ -7,6 +7,7 @@
 // 00:00 on the 3rd working day before the hearing, so in practice the bundle must
 // be lodged by close of business on the 4th working day before.
 
+import { isValidIsoDate } from './util.ts';
 import holidayData from '../data/hk-general-holidays.json' with { type: 'json' };
 
 export interface HolidayData {
@@ -36,7 +37,7 @@ const addDays = (s: string, n: number) => {
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 export function lodgingDeadline(hearingDate: string, data: HolidayData = holidayData as HolidayData): DeadlineResult {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(hearingDate)) throw new Error(`Hearing date must be YYYY-MM-DD, got "${hearingDate}".`);
+  if (!isValidIsoDate(hearingDate)) throw new Error(`"${hearingDate}" is not a valid hearing date (use YYYY-MM-DD).`);
   const hol = new Map(data.holidays.map((h) => [h.date, h.name]));
   const excludedReason = (d: string) => {
     const dow = new Date(`${d}T00:00:00Z`).getUTCDay();

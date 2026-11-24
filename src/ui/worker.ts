@@ -33,19 +33,41 @@ class NoFilterFactory {
   destroy() {}
 }
 
-const assetBase = new URL('../pdfjs/', new URL(import.meta.env.BASE_URL, self.location.href)).href;
-const ASSETS = {
-  standardFontDataUrl: `${assetBase}standard_fonts/`,
-  cMapUrl: `${assetBase}cmaps/`,
-  wasmUrl: `${assetBase}wasm/`,
+// The page tells us its address in the first message (this worker runs from a blob: URL).
+let base = '';
+let baseOrigin = '';
+
+// Defence in depth: this worker may only fetch the site's own static files.
+const realFetch = self.fetch.bind(self);
+self.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+  const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const url = new URL(href, base || undefined);
+  if (url.origin !== baseOrigin) return Promise.reject(new TypeError(`Blocked a request to another site (${url.origin}).`));
+  return realFetch(input, init);
+};
+
+const assets = () => ({
+  standardFontDataUrl: `${base}pdfjs/standard_fonts/`,
+  cMapUrl: `${base}pdfjs/cmaps/`,
+  wasmUrl: `${base}pdfjs/wasm/`,
   CanvasFactory: OffscreenCanvasFactory,
   FilterFactory: NoFilterFactory,
   isOffscreenCanvasSupported: true,
   useWorkerFetch: false,
   disableWorkerRendering: true,
-};
+});
 
-const fontBase = new URL('../fonts/', new URL(import.meta.env.BASE_URL, self.location.href)).href;
+/** Resolve `p`, or reject as soon as the build is cancelled. */
+function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new DOMException('Build cancelled', 'AbortError'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException('Build cancelled', 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then((v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+      (e) => { signal.removeEventListener('abort', onAbort); reject(e); });
+  });
+}
+
 let fontsPromise: Promise<FontBytes> | null = null;
 /** Chinese fonts (about 27 MB) are fetched from this site only when the project needs them. */
 async function fontsFor(project: Project, onLoading?: () => void): Promise<FontBytes | undefined> {
@@ -53,7 +75,7 @@ async function fontsFor(project: Project, onLoading?: () => void): Promise<FontB
   if (!fontsPromise) {
     onLoading?.();
     const get = async (f: string) => {
-      const r = await fetch(fontBase + f);
+      const r = await fetch(`${base}fonts/${f}`);
       if (!r.ok) throw new Error(`Could not load the Chinese font ${f} (${r.status}).`);
       return new Uint8Array(await r.arrayBuffer());
     };
@@ -84,7 +106,10 @@ function flags(a: PageAnalysis[]): FileFlags {
 function queueAnalysis(src: LoadedSource) {
   const sha = src.ref.sha256;
   if (analysed.has(sha)) return;
-  const p = chain.then(() => analysePdf(pdfjs as never, src.pdfBytes, ASSETS as never));
+  const p = chain.then(() => {
+    if (!bySha.has(sha)) throw new Error('File was removed.');
+    return analysePdf(pdfjs as never, src.pdfBytes, assets() as never);
+  });
   chain = p.catch(() => undefined);
   analysed.set(sha, p);
   p.then((a) => post({ type: 'analysed', sha, flags: flags(a) }), (e) => post({ type: 'analysis-failed', sha, message: String((e as Error).message ?? e) }));
@@ -107,13 +132,31 @@ function summarise(plan: Awaited<ReturnType<typeof planProject>>): PlanSummary {
     first: v.pages[0]?.label ?? '', last: v.pages[v.pages.length - 1]?.label ?? '',
     pages: v.prelimPageCount + v.pages.length,
   })));
-  return { volumes: vols, warnings: plan.warnings, physicalFiles: plan.physicalFiles };
+  // Where each document lands: "Bundle A, pages 39–158" (parts joined), main and transcript bundles.
+  const where: Record<string, string[]> = {};
+  for (const b of [plan.main, plan.transcripts]) {
+    for (const v of b?.volumes ?? []) for (const r of v.rows) {
+      if (r.kind !== 'doc') continue;
+      const range = r.firstLabel === r.lastLabel ? `page ${r.firstLabel}` : `pages ${r.firstLabel}–${r.lastLabel}`;
+      (where[r.docId] ??= []).push(`${v.name}, ${range}`);
+    }
+  }
+  const placement = Object.fromEntries(Object.entries(where).map(([k, v]) => [k, v.join('; ')]));
+  return { volumes: vols, warnings: plan.warnings, physicalFiles: plan.physicalFiles, placement };
 }
 
 self.onmessage = async (e: MessageEvent<ToWorker>) => {
   const m = e.data;
   try {
     switch (m.type) {
+      case 'init':
+        base = m.base;
+        baseOrigin = new URL(m.base).origin;
+        break;
+      case 'forget':
+        bySha.delete(m.sha);
+        analysed.delete(m.sha);
+        break;
       case 'ingest': {
         const src = await loadSource(m.tempId, m.name, new Uint8Array(m.bytes));
         if (!bySha.has(src.ref.sha256)) bySha.set(src.ref.sha256, src);
@@ -127,6 +170,7 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
         break;
       }
       case 'build': {
+        abort?.abort();
         abort = new AbortController();
         const signal = abort.signal;
         const sources = sourcesFor(m.project);
@@ -136,11 +180,12 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
         let done = 0;
         for (const sha of shas) {
           if (signal.aborted) throw new DOMException('Build cancelled', 'AbortError');
-          const a = await analysed.get(sha)!.catch(() => undefined);
+          const pending = analysed.get(sha);
+          const a = pending ? await abortable(pending.catch(() => undefined), signal) : undefined;
           for (const f of m.project.files) if (f.sha256 === sha && a) analysis.set(f.id, a);
           post({ type: 'progress', reqId: m.reqId, phase: 'Checking pages', done: ++done, total: shas.length });
         }
-        const fonts = await fontsFor(m.project, () => post({ type: 'progress', reqId: m.reqId, phase: 'Loading Chinese fonts', done: 0, total: 1 }));
+        const fonts = await abortable(fontsFor(m.project, () => post({ type: 'progress', reqId: m.reqId, phase: 'Loading Chinese fonts', done: 0, total: 1 })), signal);
         const phaseName: Record<string, string> = { plan: 'Planning', master: 'Master index', docx: 'Word indexes', labels: 'Labels', report: 'Compliance report', zip: 'Packing ZIP' };
         const onProgress = (p: { phase: string; volume?: string; done: number; total: number }) =>
           post({ type: 'progress', reqId: m.reqId, phase: p.phase === 'volume' ? `Building ${p.volume}` : phaseName[p.phase] ?? p.phase, done: p.done, total: p.total });
@@ -158,7 +203,6 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
           post({ type: 'built', reqId: m.reqId, files, zip, checks: out.report.checks, warnings: out.build.warnings, issuedProject: out.build.issuedProject },
             [...files.map((f) => f.bytes.buffer as ArrayBuffer), zip.bytes.buffer as ArrayBuffer]);
         }
-        abort = null;
         break;
       }
       case 'cancel':

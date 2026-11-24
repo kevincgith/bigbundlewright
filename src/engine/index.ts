@@ -6,7 +6,7 @@ export { loadSource, imageToA4Pdf, type LoadedSource } from './sources.ts';
 export { analysePdf, type PdfjsAssets } from './analyse.ts';
 export { planProjectBundles, sortChronologically, chronologyWarnings, freezeProject, unfreezeProject, type BuildPlan, type BundlePlan, type PlanVolume } from './plan.ts';
 export { buildBundle, planProject, outputBaseName, useBilingual, type BuildInput, type BuildOutput, type BuiltVolume, type BuiltFile } from './build.ts';
-export { serializeProject, parseProject, matchSources, describeMatch, PROJECT_SCHEMA, type SourceMatch, type SourceCandidate } from './project-io.ts';
+export { serializeProject, parseProject, matchSources, describeMatch, validSectionLetter, PROJECT_SCHEMA, type SourceMatch, type SourceCandidate } from './project-io.ts';
 export { lodgingDeadline, describeDeadline, type DeadlineResult } from './deadline.ts';
 export { FONT_FILES, projectNeedsCjkFonts, type FontBytes } from './fonts.ts';
 export { ZH, zhBundleName, zhPages } from './i18n.ts';

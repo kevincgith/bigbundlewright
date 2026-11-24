@@ -163,13 +163,13 @@ export async function planProject(project: Project, fonts?: FontBytes): Promise<
 }
 
 /** Place a source page on a new A4 page (same orientation), honouring /Rotate and the crop box. */
-async function placeOnA4(doc: PDFDocument, sp: PDFPage, clearStamp: boolean): Promise<PDFPage> {
+async function placeOnA4(doc: PDFDocument, sp: PDFPage, clearStamp: boolean, edge: 'top' | 'bottom' = 'top'): Promise<PDFPage> {
   const crop = sp.getCropBox();
   const rot = ((sp.getRotation().angle % 360) + 360) % 360;
   const emb = await doc.embedPage(sp, { left: crop.x, bottom: crop.y, right: crop.x + crop.width, top: crop.y + crop.height });
   const vw = rot % 180 === 0 ? crop.width : crop.height;
   const vh = rot % 180 === 0 ? crop.height : crop.width;
-  const fit = fitToA4(vw, vh, clearStamp);
+  const fit = fitToA4(vw, vh, clearStamp, edge);
   const VW = vw * fit.scale, VH = vh * fit.scale;
   const at = rot === 0 ? { x: fit.x, y: fit.y, r: 0 }
     : rot === 90 ? { x: fit.x, y: fit.y + VH, r: -90 }
@@ -322,7 +322,7 @@ async function buildVolume(ctx: VolumeContext, kind: BundleKind, bplan: BundlePl
       if (d.copy) {
         out = doc.addPage(copied[ci++]);
       } else {
-        out = await placeOnA4(doc, d.sp, d.clear);
+        out = await placeOnA4(doc, d.sp, d.clear, s.stamp.position.startsWith('bottom') ? 'bottom' : 'top');
         if (d.clear) note(d.p.docId!, 'shrunk', d.p.label);
         const annots = d.sp.node.Annots();
         if (annots && annots.size() > 0) note(d.p.docId!, 'relaid', d.p.label);

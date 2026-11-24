@@ -236,7 +236,7 @@ describe('issue and additional documents (PD 5.6 para 1)', () => {
     const m = await markers(r, 'core');
     expect(m.get('WRIT p8')).toBe('C8');
     expect(m.get('LATE p1')).toBe('C9');
-    expect(r.warnings.some((w) => w.code === 'appended-after-issue' && /Core Bundle pages C9–C11/.test(w.message))).toBe(true);
+    expect(r.warnings.some((w) => w.code === 'appended-after-issue' && /end of the Core Bundle \(pages C9–C11\); its "insert after" page 88 applies to the main bundle/.test(w.message))).toBe(true);
   });
 });
 
