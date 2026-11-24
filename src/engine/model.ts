@@ -81,6 +81,8 @@ export interface CaseInfo {
   bundleTitle: string;
   confidential?: boolean;
   hearingDate?: string;
+  /** BunTool parity: a pre-made cover page (first page of this file) before the index of each main volume. Unnumbered. */
+  coversheetFileId?: string;
 }
 
 export interface Settings {

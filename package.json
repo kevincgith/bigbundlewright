@@ -15,7 +15,11 @@
     "cli": "node cli/cli.ts",
     "fixtures": "node test/fixtures/generate.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "assets": "node scripts/copy-pdfjs-assets.ts",
+    "dev": "npm run assets && vite",
+    "build": "npm run assets && vite build",
+    "preview": "vite preview --port 4173"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "1.1.1",
@@ -26,6 +30,7 @@
     "@napi-rs/canvas": "1.2.0",
     "@types/node": "26.6.6",
     "typescript": "7.0.2",
+    "vite": "8.3.8",
     "vitest": "5.1.1"
   }
 }

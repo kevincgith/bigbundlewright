@@ -26,6 +26,8 @@ export interface BuildInput {
   date?: Date;
   /** Lock page numbers after this build (returns `issuedProject`). */
   issue?: boolean;
+  /** Preview: build only the cover, status front sheet and index pages of each volume. */
+  prelimsOnly?: boolean;
 }
 
 export interface BuiltFile {
@@ -40,8 +42,9 @@ export interface BuiltVolume extends BuiltFile {
   name: string;
   firstLabel: string;
   lastLabel: string;
-  /** Unnumbered pages at the front (status front sheet + index). */
+  /** Unnumbered pages at the front (coversheet + status front sheet + index). */
   prelimPages: number;
+  coverPages: number;
   frontSheetPages: number;
 }
 
@@ -122,13 +125,33 @@ async function makeMeasurer(project: Project): Promise<PrelimMeasurer> {
   const fonts = await standardFontSet(scratch);
   return (kind, rows, xref) => {
     const { front, index } = layoutPrelims(project, fonts, kind, rows, kind === 'main' ? 'Bundle A' : 'Transcript Bundle A', '8888–8888', xref);
-    return front.length + index.length;
+    return coverCount(project, kind) + front.length + index.length;
   };
 }
+
+const coverCount = (project: Project, kind: BundleKind) => (kind === 'main' && project.case.coversheetFileId ? 1 : 0);
 
 /** Plan without building (e.g. to issue a project or preview volume splits). */
 export async function planProject(project: Project): Promise<BuildPlan> {
   return planProjectBundles(project, await makeMeasurer(project));
+}
+
+/** Place a source page on a new A4 page (same orientation), honouring /Rotate and the crop box. */
+async function placeOnA4(doc: PDFDocument, sp: PDFPage, clearStamp: boolean): Promise<PDFPage> {
+  const crop = sp.getCropBox();
+  const rot = ((sp.getRotation().angle % 360) + 360) % 360;
+  const emb = await doc.embedPage(sp, { left: crop.x, bottom: crop.y, right: crop.x + crop.width, top: crop.y + crop.height });
+  const vw = rot % 180 === 0 ? crop.width : crop.height;
+  const vh = rot % 180 === 0 ? crop.height : crop.width;
+  const fit = fitToA4(vw, vh, clearStamp);
+  const VW = vw * fit.scale, VH = vh * fit.scale;
+  const at = rot === 0 ? { x: fit.x, y: fit.y, r: 0 }
+    : rot === 90 ? { x: fit.x, y: fit.y + VH, r: -90 }
+    : rot === 180 ? { x: fit.x + VW, y: fit.y + VH, r: 180 }
+    : { x: fit.x + VW, y: fit.y, r: 90 };
+  const out = doc.addPage([fit.outW, fit.outH]);
+  out.drawPage(emb, { x: at.x, y: at.y, xScale: fit.scale, yScale: fit.scale, rotate: degrees(at.r) });
+  return out;
 }
 
 function stampText(project: Project, plan: BundlePlan, label: string, series: string): string {
@@ -176,6 +199,7 @@ interface VolumeContext {
   analysis?: Map<string, PageAnalysis[]>;
   signal?: AbortSignal;
   created: Date;
+  prelimsOnly?: boolean;
   notes?: Notes;
   unsupported: Set<string>;
   onPages: (n: number) => void;
@@ -197,12 +221,45 @@ async function buildVolume(ctx: VolumeContext, kind: BundleKind, bplan: BundlePl
   const firstLabel = vol.pages[0].label, lastLabel = vol.pages[vol.pages.length - 1].label;
   const range = pageRange(firstLabel, lastLabel);
   const { front, index } = layoutPrelims(project, fonts, kind, vol.rows, vol.name, range, xref);
-  if (front.length + index.length !== vol.prelimPageCount) {
-    throw new Error(`Internal error: front pages for ${vol.name} laid out to ${front.length + index.length} pages, planned ${vol.prelimPageCount}.`);
+  const nCover = coverCount(project, kind);
+  if (nCover + front.length + index.length !== vol.prelimPageCount) {
+    throw new Error(`Internal error: front pages for ${vol.name} laid out to ${nCover + front.length + index.length} pages, planned ${vol.prelimPageCount}.`);
+  }
+  const coverPages: PDFPage[] = [];
+  if (nCover) {
+    const src = sources.get(project.case.coversheetFileId!);
+    if (!src) throw new Error('Missing source file for the coversheet.');
+    coverPages.push(await placeOnA4(doc, src.pdf.getPage(0), false));
   }
   const draw = (l: IndexPageLayout) => { const p = doc.addPage([A4.w, A4.h]); drawOps(p, l.ops, fonts); return p; };
   const frontPages = front.map(draw);
   const indexPages = index.map(draw);
+  const nPre = coverPages.length + frontPages.length + indexPages.length;
+  const prelimLabels = [
+    ...(coverPages.length ? [{ start: 0, prefix: 'Cover' }] : []),
+    ...(frontPages.length ? [{ start: coverPages.length, style: 'r' as const, prefix: 'Status ' }] : []),
+    { start: coverPages.length + frontPages.length, style: 'r' as const, prefix: 'Index ' },
+  ];
+  const c = project.case;
+  const finish = async (labels: Parameters<typeof setPageLabels>[1]): Promise<BuiltVolume> => {
+    setPageLabels(doc, labels);
+    doc.setTitle(`${c.actionNo} ${c.shortTitle} – ${c.bundleTitle} – ${vol.name}`, { showInWindowTitleBar: true });
+    doc.setSubject(`${c.bundleTitle}, ${vol.name}, pages ${range}`);
+    doc.setProducer('Big Bundle Wright');
+    doc.setCreator('Big Bundle Wright');
+    doc.setLanguage('en-HK');
+    doc.setCreationDate(ctx.created);
+    doc.setModificationDate(ctx.created);
+    for (const ch of fonts.unsupported) ctx.unsupported.add(ch);
+    const bytes = await doc.save({ useObjectStreams: true });
+    return {
+      kind, letter: vol.letter, name: vol.name,
+      fileName: `${outputBaseName(project)} ${vol.name}${ctx.prelimsOnly ? ' (index preview)' : ''}.pdf`,
+      bytes, pageCount: doc.getPageCount(), firstLabel, lastLabel,
+      prelimPages: nPre, coverPages: coverPages.length, frontSheetPages: frontPages.length,
+    };
+  };
+  if (ctx.prelimsOnly) return finish(prelimLabels);
 
   // ---- content pages ----
   const contentPages: PDFPage[] = [];
@@ -238,18 +295,7 @@ async function buildVolume(ctx: VolumeContext, kind: BundleKind, bplan: BundlePl
       if (d.copy) {
         out = doc.addPage(copied[ci++]);
       } else {
-        const { crop, rot } = d;
-        const emb = await doc.embedPage(d.sp, { left: crop.x, bottom: crop.y, right: crop.x + crop.width, top: crop.y + crop.height });
-        const vw = rot % 180 === 0 ? crop.width : crop.height;
-        const vh = rot % 180 === 0 ? crop.height : crop.width;
-        const fit = fitToA4(vw, vh, d.clear);
-        const VW = vw * fit.scale, VH = vh * fit.scale;
-        const at = rot === 0 ? { x: fit.x, y: fit.y, r: 0 }
-          : rot === 90 ? { x: fit.x, y: fit.y + VH, r: -90 }
-          : rot === 180 ? { x: fit.x + VW, y: fit.y + VH, r: 180 }
-          : { x: fit.x + VW, y: fit.y, r: 90 };
-        out = doc.addPage([fit.outW, fit.outH]);
-        out.drawPage(emb, { x: at.x, y: at.y, xScale: fit.scale, yScale: fit.scale, rotate: degrees(at.r) });
+        out = await placeOnA4(doc, d.sp, d.clear);
         if (d.clear) note(d.p.docId!, 'shrunk', d.p.label);
         const annots = d.sp.node.Annots();
         if (annots && annots.size() > 0) note(d.p.docId!, 'relaid', d.p.label);
@@ -281,7 +327,8 @@ async function buildVolume(ctx: VolumeContext, kind: BundleKind, bplan: BundlePl
 
   // ---- bookmarks ----
   const secs = new Map(project.sections.map((x) => [x.id, x]));
-  const top: OutlineItem = { title: `${vol.name} (pp. ${range})`, page: frontPages[0] ?? indexPages[0], children: [] };
+  const top: OutlineItem = { title: `${vol.name} (pp. ${range})`, page: coverPages[0] ?? frontPages[0] ?? indexPages[0], children: [] };
+  if (coverPages.length) top.children!.push({ title: 'Cover', page: coverPages[0] });
   if (frontPages.length) top.children!.push({ title: 'Status of documents', page: frontPages[0] });
   top.children!.push({ title: 'Index', page: indexPages[0] });
   let secNode: OutlineItem | null = null;
@@ -301,29 +348,7 @@ async function buildVolume(ctx: VolumeContext, kind: BundleKind, bplan: BundlePl
   }
   writeOutline(doc, [top]);
 
-  // ---- page labels ----
-  setPageLabels(doc, [
-    ...(frontPages.length ? [{ start: 0, style: 'r' as const, prefix: 'Status ' }] : []),
-    { start: frontPages.length, style: 'r', prefix: 'Index ' },
-    ...labelRanges(vol.pages.map((p) => p.label), frontPages.length + indexPages.length),
-  ]);
-
-  const c = project.case;
-  doc.setTitle(`${c.actionNo} ${c.shortTitle} – ${c.bundleTitle} – ${vol.name}`, { showInWindowTitleBar: true });
-  doc.setSubject(`${c.bundleTitle}, ${vol.name}, pages ${range}`);
-  doc.setProducer('Big Bundle Wright');
-  doc.setCreator('Big Bundle Wright');
-  doc.setLanguage('en-HK');
-  doc.setCreationDate(ctx.created);
-  doc.setModificationDate(ctx.created);
-  for (const ch of fonts.unsupported) ctx.unsupported.add(ch);
-  const bytes = await doc.save({ useObjectStreams: true });
-  return {
-    kind, letter: vol.letter, name: vol.name,
-    fileName: `${outputBaseName(project)} ${vol.name}.pdf`,
-    bytes, pageCount: doc.getPageCount(), firstLabel, lastLabel,
-    prelimPages: frontPages.length + indexPages.length, frontSheetPages: frontPages.length,
-  };
+  return finish([...prelimLabels, ...labelRanges(vol.pages.map((p) => p.label), nPre)]);
 }
 
 export async function buildBundle(input: BuildInput): Promise<BuildOutput> {
@@ -347,7 +372,7 @@ export async function buildBundle(input: BuildInput): Promise<BuildOutput> {
     for (const vol of b.volumes) {
       checkAbort(signal);
       volumes.push(await buildVolume({
-        project, sources: input.sources, analysis: input.analysis, signal, created, unsupported,
+        project, sources: input.sources, analysis: input.analysis, signal, created, unsupported, prelimsOnly: input.prelimsOnly,
         notes: b.kind === 'core' ? undefined : notes, // core pages repeat the main bundle's
         onPages: (n) => { done += n; input.onProgress?.({ phase: 'volume', volume: vol.name, done, total: totalPages }); },
       }, b.kind, b, vol, xref));
@@ -368,7 +393,7 @@ export async function buildBundle(input: BuildInput): Promise<BuildOutput> {
 
   let masterIndex: BuiltFile | undefined;
   const mainBuilt = volumes.filter((v) => v.kind === 'main');
-  if (mainBuilt.length > 1) {
+  if (mainBuilt.length > 1 && !input.prelimsOnly) {
     checkAbort(signal);
     input.onProgress?.({ phase: 'master', done: 0, total: 1 });
     masterIndex = await buildMasterIndex(project, plan.main, mainBuilt, created);

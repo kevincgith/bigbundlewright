@@ -78,6 +78,9 @@ export function parseProject(text: string): { project: Project; warnings: string
     if (d.sectionId && !sectionIds.has(d.sectionId)) warnings.push(`${name} refers to a section that no longer exists; it will be listed under "Other documents".`);
     if (d.insertAfter && !project.frozen) warnings.push(`${name} is marked to go after page ${d.insertAfter}, which only applies once the bundle has been issued.`);
   }
+  if (project.case.coversheetFileId && !fileIds.has(project.case.coversheetFileId)) {
+    throw new ProjectError('The coversheet refers to a file that is not in the project.');
+  }
   if (project.frozen) {
     for (const id of Object.keys(project.frozen.fileHashes ?? {})) {
       if (!fileIds.has(id)) throw new ProjectError(`The issued bundle used a file (${id}) that is no longer in the project.`);
