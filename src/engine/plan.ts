@@ -639,7 +639,7 @@ export function planProjectBundles(project: Project, measure: PrelimMeasurer): B
   const byHash = new Map<string, string[]>();
   for (const f of project.files) byHash.set(f.sha256, [...(byHash.get(f.sha256) ?? []), f.name]);
   for (const names of byHash.values()) {
-    if (names.length > 1) warnings.push({ code: 'duplicate', message: `Identical content: ${names.map((n) => `"${n}"`).join(', ')}.` });
+    if (names.length > 1) warnings.push({ code: 'duplicate', message: `These are the same document added twice: ${names.map((n) => `"${n}"`).join(', ')}. Remove one unless both are needed.` });
   }
 
   if (!mainDocs.length) throw new ProjectError('There are no documents for the main bundle.');

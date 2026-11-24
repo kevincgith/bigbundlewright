@@ -55,7 +55,7 @@ export async function loadSource(id: string, name: string, bytes: Uint8Array): P
     try {
       pdfBytes = await imageToA4Pdf(bytes, kind);
     } catch (e) {
-      throw new SourceError(name, 'corrupt', `"${name}" could not be read as a ${kind.toUpperCase()} image (${(e as Error).message}).`);
+      throw new SourceError(name, 'corrupt', `"${name}" could not be opened as a picture. Try opening it and saving it again, then add it again.`);
     }
   }
   let pdf: PDFDocument;
@@ -67,7 +67,7 @@ export async function loadSource(id: string, name: string, bytes: Uint8Array): P
       throw new SourceError(name, 'encrypted',
         `"${name}" is encrypted or password-protected. Remove the protection (open it and "Print to PDF", or ask the sender for an unprotected copy), then add it again.`);
     }
-    throw new SourceError(name, 'corrupt', `"${name}" is damaged or not a valid PDF (${err.message}).`);
+    throw new SourceError(name, 'corrupt', `"${name}" could not be opened. It may be damaged. Try opening it and saving or printing it again as a PDF, then add it again.`);
   }
   const pageCount = pdf.getPageCount();
   if (pageCount === 0) throw new SourceError(name, 'empty', `"${name}" has no pages.`);

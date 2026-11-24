@@ -79,7 +79,7 @@ export function startTour(steps: TourStep[], opts: { onClose?: () => void } = {}
       h('div', null, ...step.body),
       h('div', { class: 'tour-dots', 'aria-hidden': 'true' }, ...steps.map((_, k) => h('i', { class: k === index ? 'on' : '' }))),
       h('div', { class: 'tour-actions' },
-        h('button', { class: 'btn ghost small', onclick: close }, last ? 'Close' : 'Skip the tour'),
+        h('button', { class: 'btn ghost small', onclick: close }, last ? 'Close' : 'Close the walk-through'),
         h('span', null,
           index > 0 ? h('button', { class: 'btn small', onclick: () => show(index - 1) }, 'Back') : null,
           ...(step.actions ?? []).map((a) => h('button', {

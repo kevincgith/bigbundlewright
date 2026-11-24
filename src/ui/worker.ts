@@ -216,12 +216,12 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
           const pending = analysed.get(sha);
           const a = pending ? await abortable(pending.catch(() => undefined), signal) : undefined;
           for (const f of m.project.files) if (f.sha256 === sha && a) analysis.set(f.id, a);
-          post({ type: 'progress', reqId: m.reqId, phase: 'Checking pages', done: ++done, total: shas.length });
+          post({ type: 'progress', reqId: m.reqId, phase: 'Checking the pages', done: ++done, total: shas.length });
         }
-        const fonts = await abortable(fontsFor(m.project, () => post({ type: 'progress', reqId: m.reqId, phase: 'Loading Chinese fonts', done: 0, total: 1 })), signal);
-        const phaseName: Record<string, string> = { plan: 'Planning', master: 'Master index', docx: 'Word indexes', labels: 'Labels', report: 'Compliance report', zip: 'Packing ZIP' };
+        const fonts = await abortable(fontsFor(m.project, () => post({ type: 'progress', reqId: m.reqId, phase: 'Loading the Chinese lettering', done: 0, total: 1 })), signal);
+        const phaseName: Record<string, string> = { plan: 'Working out the pages', master: 'Making the master index', docx: 'Making the Word copy of the index', labels: 'Making the spine and cover labels', report: 'Checking against PD 5.6', zip: 'Putting the files together' };
         const onProgress = (p: { phase: string; volume?: string; done: number; total: number }) =>
-          post({ type: 'progress', reqId: m.reqId, phase: p.phase === 'volume' ? `Building ${p.volume}` : phaseName[p.phase] ?? p.phase, done: p.done, total: p.total });
+          post({ type: 'progress', reqId: m.reqId, phase: p.phase === 'volume' ? `Making ${p.volume}` : phaseName[p.phase] ?? p.phase, done: p.done, total: p.total });
         if (m.prelimsOnly) {
           const out = await buildBundle({ project: m.project, sources, analysis, signal, fonts, prelimsOnly: true, onProgress });
           const files = out.volumes.map((v) => ({ fileName: v.fileName, bytes: v.bytes, kind: 'volume', pageCount: v.pageCount }));

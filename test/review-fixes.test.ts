@@ -171,7 +171,7 @@ describe('project-file validation', () => {
     ['bad date style', (r: any) => { r.settings.dateStyle = 'D/M/Y'; }, /dateStyle/],
     ['invalid hearing date', (r: any) => { r.case.hearingDate = '2026-02-30'; }, /not a valid date/],
     ['non-integer page count', (r: any) => { r.files[0].pageCount = 2.5; }, /incomplete/],
-    ['frozen without bundles', (r: any) => { r.frozen = { issuedAt: 'x', fileHashes: {} }; }, /issued layout .* is damaged/],
+    ['frozen without bundles', (r: any) => { r.frozen = { issuedAt: 'x', fileHashes: {} }; }, /issued layout is damaged/],
   ])('%s', (_name, mut, msg) => {
     expect(bad(mut)).toThrow(msg);
   });

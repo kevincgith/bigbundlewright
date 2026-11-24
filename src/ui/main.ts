@@ -52,7 +52,7 @@ function startWorker() {
 
 /** The worker crashed (for example out of memory): fail everything pending and start again. */
 function workerDied() {
-  const err: WorkerError = { name: 'WorkerError', message: 'The background worker stopped, possibly because it ran out of memory. Add the files again to continue.' };
+  const err: WorkerError = { name: 'WorkerError', message: 'The page ran out of room while working. Your list and case details are safe: add the PDFs again to continue. If this keeps happening, close other browser tabs, or build a smaller bundle at a time.' };
   for (const p of pending.values()) p.reject(err);
   pending.clear();
   try { worker.terminate(); } catch { /* already gone */ }
@@ -63,7 +63,7 @@ function workerDied() {
   for (const f of S.project.files) reopened.add(f.id);
   startWorker();
   renderAll();
-  showError('Something went wrong', err);
+  showError('The page ran out of room', err);
 }
 
 function onWorkerMessage(e: MessageEvent<FromWorker>) {
@@ -139,7 +139,9 @@ const S = {
     checks?: ComplianceCheck[];
     warnings: BuildWarning[]; preview: boolean;
   },
-  reorder: 'drag' as 'drag' | 'arrows',
+  reorder: 'arrows' as 'drag' | 'arrows',
+  /** A plain note shown after adding documents. */
+  addedNote: '',
   ingesting: 0,
   dateDraft: new Map<string, string>(),
   analysisErrors: new Map<string, string>(),
@@ -148,7 +150,13 @@ const S = {
   fontsState: '' as '' | 'loading' | 'ready' | 'failed',
   /** Bumped on every edit; a build whose revision is stale is not shown. */
   rev: 0,
+  /** Revision at the last save (project file or a build's ZIP, which contains it). */
+  savedRev: 0,
   settingsOpen: false,
+  /** The last build issued the bundle: remind the user to save. */
+  issuedNow: false,
+  /** The last removed document, so it can be put back. */
+  undo: null as null | { doc: BundleDoc; index: number },
 };
 
 const DOC_TYPES: [DocType, string][] = [['document', 'Document'], ['pleading', 'Pleading'], ['witness_statement', 'Witness statement'], ['expert', 'Expert report'], ['correspondence', 'Correspondence'], ['transcript', 'Transcript']];
@@ -168,7 +176,8 @@ const sel$ = (key: string) => `[data-key="${CSS.escape(key)}"]`;
 function pruneFiles() {
   const p = S.project;
   const used = new Set<string>();
-  for (const d of p.docs) { used.add(d.fileId); for (const t of d.typedCopies ?? []) used.add(t.fileId); }
+  const keep = S.undo ? [...p.docs, S.undo.doc] : p.docs;
+  for (const d of keep) { used.add(d.fileId); for (const t of d.typedCopies ?? []) used.add(t.fileId); }
   if (p.case.coversheetFileId) used.add(p.case.coversheetFileId);
   for (const id of Object.keys(p.frozen?.fileHashes ?? {})) used.add(id);
   const removed = p.files.filter((f) => !used.has(f.id));
@@ -192,8 +201,9 @@ function edited() {
   schedulePlan();
 }
 
-function changed(opts: { docs?: boolean; build?: boolean } = {}) {
+function changed(opts: { docs?: boolean; build?: boolean; keepNote?: boolean } = {}) {
   S.rev++;
+  if (!opts.keepNote) S.addedNote = '';
   pruneFiles();
   clearResults();
   renderHeader();
@@ -233,7 +243,9 @@ type Purpose = { kind: 'doc' } | { kind: 'typed'; docId: string; afterPage: numb
 async function addFiles(list: FileList | File[], purpose: Purpose = { kind: 'doc' }) {
   const files = [...list];
   if (S.job) { announce('Wait for the build to finish before adding files.'); return; }
+  S.undo = null;
   S.ingesting += files.length;
+  const before = S.project.docs.length;
   renderDocs();
   renderBuild();
   for (const file of files) {
@@ -249,8 +261,12 @@ async function addFiles(list: FileList | File[], purpose: Purpose = { kind: 'doc
       S.ingesting--;
     }
   }
-  changed();
-  announce(`${files.length} file(s) processed.`);
+  const added = S.project.docs.length - before;
+  S.addedNote = added > 0
+    ? `${added} document${added === 1 ? '' : 's'} added. Check each date, description and status, then press "Build bundle" at the bottom of the page.`
+    : '';
+  changed({ keepNote: true });
+  announce(S.addedNote || `${files.length} file${files.length === 1 ? '' : 's'} checked.`);
 }
 
 function onIngested(ref: SourceFileRef, purpose: Purpose) {
@@ -303,9 +319,10 @@ function pickFiles(purpose: Purpose, multiple = true) {
 // ---------------------------------------------------------------- project save / open / autosave
 
 function saveProject() {
-  const name = `${outputBaseName(S.project) || 'Untitled'} project.json`;
+  const name = `${outputBaseName(S.project) || 'Untitled'} - saved work.json`;
   download(name, serializeProject(S.project), 'application/json');
-  announce('Project saved.');
+  S.savedRev = S.rev;
+  announce('Saved. Keep this file: open it later with "Open saved work" to carry on.');
 }
 
 async function openProject(file: File) {
@@ -314,7 +331,8 @@ async function openProject(file: File) {
     adoptProject(project);
     if (warnings.length) showMessage('Project opened with notes', warnings);
   } catch (e) {
-    showError('Could not open the project', e as Error);
+    const err = e as Error;
+    showError('This file could not be opened', { name: err.name, message: `This is not a saved Big Bundle Wright file, or it has been changed since it was saved. Try an earlier copy. (Detail: ${err.message})` });
   }
 }
 
@@ -323,8 +341,11 @@ function adoptProject(project: Project) {
   reopened.clear();
   for (const f of project.files) if (!S.loaded.has(f.sha256)) reopened.add(f.id);
   S.fileErrors = [];
+  S.undo = null;
+  S.addedNote = '';
   clearResults();
   S.rev++;
+  S.savedRev = S.rev;
   pruneFiles();
   renderAll();
   schedulePlan();
@@ -387,10 +408,14 @@ async function runBuild(opts: { issue?: boolean; prelimsOnly?: boolean } = {}) {
     const miss = missingInfo();
     if (miss.length && !(await confirmDialog('Missing information', miss, 'Build anyway'))) return;
   }
-  if (opts.issue && !(await confirmDialog('Issue the bundle?', [
-    'Issuing locks every page number. After this, late documents are added as 88-1, 88-2… (PD 5.6 para 1) and nothing can be removed without re-issuing.',
-    'Save the project file afterwards: you need it to add documents later.',
-  ], 'Build and issue'))) return;
+  if (opts.issue && !(await confirmDialog(isFrozen() ? 'Issue again?' : 'Issue the bundle?', isFrozen() ? [
+    'This locks the numbers given to documents added since the last issue (88-1, 88-2…), so they cannot change again.',
+    'Afterwards, save your work: you need it to add more documents later.',
+  ] : [
+    'Use this when the bundle is final, for example when you lodge or serve it.',
+    'Issuing locks every page number. Documents added later go in after a page you choose as 88-1, 88-2 (PD 5.6 para 1), so existing page numbers never change. Documents in the bundle can no longer be removed.',
+    'Afterwards, save your work: you need it to add documents later.',
+  ], 'Issue and lock page numbers'))) return;
   if (S.job || S.ingesting) return;
   clearResults();
   const reqId = uid('r');
@@ -417,7 +442,8 @@ async function runBuild(opts: { issue?: boolean; prelimsOnly?: boolean } = {}) {
       files: r.files.map((f) => ({ fileName: f.fileName, kind: f.kind, pageCount: f.pageCount, size: f.bytes.byteLength, url: URL.createObjectURL(new Blob([f.bytes as BlobPart], { type: mime(f.fileName) })) })),
       zip: r.zip ? { fileName: r.zip.fileName, size: r.zip.bytes.byteLength, url: URL.createObjectURL(new Blob([r.zip.bytes as BlobPart], { type: 'application/zip' })) } : undefined,
     };
-    if (r.issuedProject) { S.project = r.issuedProject; autosave(); renderAll(); }
+    if (r.issuedProject) { S.project = r.issuedProject; S.rev++; S.issuedNow = true; autosave(); renderAll(); }
+    S.addedNote = '';
     announce(opts.prelimsOnly ? 'Index preview ready.' : 'Bundle ready to download.');
   } catch (e) {
     const err = e as WorkerError;
@@ -430,6 +456,7 @@ async function runBuild(opts: { issue?: boolean; prelimsOnly?: boolean } = {}) {
 }
 
 function clearResults() {
+  S.issuedNow = false;
   for (const f of S.results?.files ?? []) URL.revokeObjectURL(f.url);
   if (S.results?.zip) URL.revokeObjectURL(S.results.zip.url);
   S.results = null;
@@ -439,11 +466,21 @@ function clearResults() {
 
 function dialog(title: string, body: (Node | string)[], buttons: { label: string; value: string; primary?: boolean }[]): Promise<string> {
   return new Promise((resolve) => {
+    let done = false;
+    // Finish straight from the button (not only from the 'close' event, which some browsers deliver late).
+    const finish = (value: string) => {
+      if (done) return;
+      done = true;
+      if (dlg.open) dlg.close(value);
+      dlg.remove();
+      resolve(value);
+    };
     const dlg = h('dialog', { class: 'dlg', 'aria-labelledby': 'dlg-title' },
       h('h2', { id: 'dlg-title' }, title),
       ...body,
-      h('div', { class: 'dlg-actions' }, ...buttons.map((b) => h('button', { class: b.primary ? 'btn primary' : 'btn', value: b.value, onclick: () => dlg.close(b.value) }, b.label))));
-    dlg.addEventListener('close', () => { dlg.remove(); resolve(dlg.returnValue); });
+      h('div', { class: 'dlg-actions' }, ...buttons.map((b) => h('button', { class: b.primary ? 'btn primary' : 'btn', value: b.value, onclick: () => finish(b.value) }, b.label))));
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); finish('no'); }); // Esc
+    dlg.addEventListener('close', () => finish(dlg.returnValue || 'no'));
     document.body.appendChild(dlg);
     dlg.showModal();
   });
@@ -460,7 +497,7 @@ function showError(title: string, err: { name?: string; code?: string; message: 
     `Documents: ${S.project.docs.length}, files: ${S.project.files.length}, pages: ${S.project.files.reduce((a, f) => a + f.pageCount, 0)}, issued: ${isFrozen()}`,
   ].join('\n');
   dialog(title, [h('p', null, err.message),
-    h('p', { class: 'muted' }, 'If this looks like a fault, "Copy details" copies a short technical summary (no document names or contents) you can send in a bug report.')],
+    h('p', { class: 'muted' }, 'If this keeps happening, press "Copy details" and paste it into your report of the problem. It contains no document names or contents.')],
   [{ label: 'Copy details', value: 'copy' }, { label: 'OK', value: 'ok', primary: true }]).then((v) => {
     if (v === 'copy') navigator.clipboard?.writeText(details).then(() => announce('Details copied.'));
   });
@@ -475,23 +512,23 @@ function renderHeader() {
     h('button', {
       class: 'btn ghost', dataset: { key: 'theme' }, title: 'Switch between light and dark colours',
       onclick: () => { theme = theme === 'dark' ? 'light' : 'dark'; applyTheme(theme); store.set(LS.theme, theme); renderHeader(); announce(theme === 'dark' ? 'Dark colours on.' : 'Light colours on.'); },
-    }, theme === 'dark' ? 'Light mode' : 'Dark mode'),
-    h('button', { class: 'btn ghost', dataset: { key: 'tour' }, onclick: () => openTour() }, 'Tour'),
-    h('button', { class: 'btn', title: 'Open a project file you saved before, then add the same PDFs again', onclick: () => { const i = h('input', { type: 'file', accept: '.json,application/json' }); i.onchange = () => i.files?.[0] && openProject(i.files[0]); i.click(); } }, 'Open project…'),
-    h('button', { class: 'btn', onclick: saveProject, disabled: !S.project.docs.length, title: 'Download the project file (your list and settings, no document contents) to continue later' }, 'Save project'),
+    }, theme === 'dark' ? 'Light colours' : 'Dark colours'),
+    h('button', { class: 'btn ghost', dataset: { key: 'tour' }, onclick: () => openTour() }, 'How to use'),
+    h('button', { class: 'btn', dataset: { key: 'open' }, title: 'Carry on with work you saved before', onclick: () => { const i = h('input', { type: 'file', accept: '.json,application/json' }); i.onchange = () => i.files?.[0] && openProject(i.files[0]); i.click(); } }, 'Open saved work…'),
+    h('button', { class: 'btn', dataset: { key: 'save' }, onclick: saveProject, disabled: !S.project.docs.length, title: 'Save your list and settings to a small file, so you can carry on later. Your documents are not included.' }, 'Save work'),
     h('button', {
       class: 'btn ghost', onclick: async () => {
-        if (S.project.docs.length && !(await confirmDialog('Start a new project?', ['This clears the current documents and details from the page. Save the project first if you will need it.'], 'Start new'))) return;
+        if (S.project.docs.length && !(await confirmDialog('Start again?', ['This clears the case details and the document list from the page.', S.rev !== S.savedRev ? 'You have changes that are not saved. Use "Save work" first if you will need them.' : 'Your saved work is not affected.'], 'Start again'))) return;
         clearResults(); adoptProject(newProject());
       },
-    }, 'New'));
+    }, 'Start again'));
 }
 
 function renderGuide() {
   const el = $('guide');
   if (store.get(LS.guide) === '1') { el.hidden = true; return; }
   el.hidden = false;
-  const items: [string, string, string][] = [
+  const pd: [string, string, string][] = [
     ['Para 1', 'Leave out unnecessary documents.', 'Only those likely to be referred to at trial.'],
     ['Para 2', 'A core bundle over 100 pages.', 'The documents central to the dispute.'],
     ['Para 3', 'Status of each document.', 'Marked on the front of the bundle.'],
@@ -501,11 +538,19 @@ function renderGuide() {
   ];
   replace(el,
     h('div', { class: 'guide-head' },
-      h('h2', null, 'PD 5.6 in brief'),
-      h('div', { class: 'guide-actions' },
-        h('button', { class: 'linkbtn', dataset: { key: 'guide-tour' }, onclick: () => openTour() }, store.get(LS.toured) ? 'Show the walk-through again' : 'New here? Take the two-minute walk-through'),
-        h('button', { class: 'btn ghost small', dataset: { key: 'guide-hide' }, onclick: () => { store.set(LS.guide, '1'); renderGuide(); } }, 'Hide'))),
-    h('ul', { class: 'pd-list' }, ...items.map(([ref, lead, rest]) => h('li', null, h('span', { class: 'ref' }, ref), h('span', null, h('b', null, lead), ' ', rest)))));
+      h('h2', null, 'Make a bundle in three steps'),
+      h('button', { class: 'btn ghost small', dataset: { key: 'guide-hide' }, onclick: () => { store.set(LS.guide, '1'); renderGuide(); announce('Hidden. "How to use" at the top still shows the walk-through.'); } }, 'Hide this')),
+    h('ol', { class: 'start-steps' },
+      h('li', null, h('b', null, 'Fill in the case details'), ' below: action number, short title and parties.'),
+      h('li', null, h('b', null, 'Add your PDF documents'), ' and check the list: dates, descriptions and status.'),
+      h('li', null, h('b', null, 'Press "Build bundle"'), ' at the bottom and download the result.')),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn primary', dataset: { key: 'guide-tour' }, onclick: () => openTour() }, 'Show me how (2 minutes)'),
+      h('button', { class: 'btn', dataset: { key: 'guide-examples' }, onclick: async () => { await loadExamples(); $('docs').scrollIntoView({ block: 'start' }); } }, 'Try it with example documents')),
+    h('p', { class: 'hint' }, 'Nothing is uploaded: your documents stay on this computer the whole time.'),
+    h('details', { class: 'pd-brief' },
+      h('summary', null, 'PD 5.6 in brief'),
+      h('ul', { class: 'pd-list' }, ...pd.map(([ref, lead, rest]) => h('li', null, h('span', { class: 'ref' }, ref), h('span', null, h('b', null, lead), ' ', rest))))));
 }
 
 function field(label: string, input: HTMLElement, hint?: string) {
@@ -522,7 +567,7 @@ function renderCase() {
   const courtSel = h('select', {
     dataset: { key: 'court-preset' },
     onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; if (COURTS[v]) { c.court = v ? COURTS[v] : c.court; renderCase(); set(); } },
-  }, h('option', { value: '' }, 'Preset…'), ...Object.keys(COURTS).map((k) => h('option', { value: k, selected: COURTS[k] === c.court }, k)));
+  }, h('option', { value: '' }, 'Choose a court…'), ...Object.keys(COURTS).map((k) => h('option', { value: k, selected: COURTS[k] === c.court }, k)));
   const court = h('textarea', { rows: 3, 'aria-label': 'Court heading (one line per row)', dataset: { key: 'court' }, oninput: (e: Event) => { c.court = (e.target as HTMLTextAreaElement).value; set(); } });
   court.value = c.court;
 
@@ -604,12 +649,12 @@ function docRow(d: BundleDoc, i: number, warn: Map<string, string>, frozenIds: S
   const notes: (string | Node)[] = [];
   if (missing) notes.push(h('span', { class: 'badge bad' }, 'File needed'));
   if (!d.date && !S.dateDraft.has(d.id)) notes.push(h('span', { class: 'badge warn', title: 'Add a date so the document can be placed in chronological order.' }, 'No date'));
-  if (warn.get(d.id)) notes.push(h('span', { class: 'badge warn', title: warn.get(d.id) }, 'Out of order'));
-  if (fl?.imageOnly.length) notes.push(h('span', { class: 'badge', title: `Pages ${fl.imageOnly.join(', ')} are images with no text layer. Check legibility; you can attach a typed copy.` }, `Scanned: ${fl.imageOnly.length} p.`));
-  if (fl?.edge.length) notes.push(h('span', { class: 'badge', title: `Pages ${fl.edge.join(', ')} have content within 5 mm of the edge.` }, 'Near edge'));
-  if (f && S.project.files.some((g) => g.id !== f.id && g.sha256 === f.sha256)) notes.push(h('span', { class: 'badge warn' }, 'Duplicate'));
-  if (f && fl === undefined && S.loaded.has(f.sha256)) notes.push(h('span', { class: 'badge muted' }, 'Checking…'));
-  if (f && fl === null) notes.push(h('span', { class: 'badge warn', title: S.analysisErrors.get(f.sha256) ?? '' }, 'Pages not checked'));
+  if (warn.get(d.id)) notes.push(h('span', { class: 'badge warn', title: `${warn.get(d.id)} Use "Sort by date", or leave it if the parties agreed this order.` }, 'Out of date order'));
+  if (fl?.imageOnly.length) notes.push(h('span', { class: 'badge', title: `Page${fl.imageOnly.length > 1 ? 's' : ''} ${fl.imageOnly.join(', ')} ${fl.imageOnly.length > 1 ? 'are' : 'is a'} scanned picture${fl.imageOnly.length > 1 ? 's' : ''}, so the words cannot be searched. Check ${fl.imageOnly.length > 1 ? 'they are' : 'it is'} easy to read; if not, attach a typed copy.` }, `Scanned pages: ${fl.imageOnly.length}`));
+  if (fl?.edge.length) notes.push(h('span', { class: 'badge', title: `Text on page${fl.edge.length > 1 ? 's' : ''} ${fl.edge.join(', ')} is within 5 mm of the edge and may be cut off when copied or bound.` }, 'Text near edge'));
+  if (f && S.project.files.some((g) => g.id !== f.id && g.sha256 === f.sha256)) notes.push(h('span', { class: 'badge warn', title: 'This exact document is in the list twice. Remove one unless both are needed.' }, 'Added twice'));
+  if (f && fl === undefined && S.loaded.has(f.sha256)) notes.push(h('span', { class: 'badge muted' }, 'Checking pages…'));
+  if (f && fl === null) notes.push(h('span', { class: 'badge warn', title: 'The pages of this document could not be checked for scans or text near the edge. The bundle can still be made; look over these pages yourself.' }, 'Pages not checked'));
   for (const t of d.typedCopies ?? []) {
     const fixed = lockedPairs.has(`${d.id}|${t.fileId}`);
     notes.push(h('span', { class: 'badge' }, `Typed copy after p. ${t.afterPage}`,
@@ -671,7 +716,14 @@ function docRow(d: BundleDoc, i: number, warn: Map<string, string>, frozenIds: S
       h('button', {
         class: 'linkbtn danger', dataset: { key: `rm-${d.id}` }, 'aria-label': `Remove "${d.description}"`, disabled: locked,
         title: locked ? 'Issued documents cannot be removed without re-issuing' : '',
-        onclick: () => { S.project.docs = S.project.docs.filter((x) => x.id !== d.id); changed(); announce(`Removed "${d.description}".`); },
+        onclick: () => {
+          const index = S.project.docs.findIndex((x) => x.id === d.id);
+          S.undo = { doc: d, index };
+          S.project.docs = S.project.docs.filter((x) => x.id !== d.id);
+          changed();
+          announce(`Removed "${d.description}". Use "Undo" to put it back.`);
+          requestAnimationFrame(() => document.querySelector<HTMLElement>(sel$('undo'))?.focus());
+        },
       }, 'Remove'))),
   h('td', { dataset: { label: 'Type' } }, h('select', { 'aria-label': `Type of document ${i + 1}`, dataset: { key: `type-${d.id}` }, onchange: (e: Event) => { d.type = (e.target as HTMLSelectElement).value as DocType; changed(); } },
     ...DOC_TYPES.map(([v, l]) => h('option', { value: v, selected: d.type === v }, l)))),
@@ -714,17 +766,29 @@ function renderDocs() {
     ondragleave: () => drop.classList.remove('over'),
     ondrop: (e: DragEvent) => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer?.files.length) addFiles(e.dataTransfer.files); },
   },
-  h('strong', null, 'Add documents'), h('span', null, 'Drop PDF, JPG or PNG files here, or click to choose. Word and email files: convert to PDF first.'),
+  h('strong', null, 'Add documents'), h('span', null, 'Drag PDF files (or JPG and PNG pictures) here, or click to choose them. Word and email files: save them as PDF first.'),
+  h('span', { class: 'hint' }, 'The files stay on this computer; nothing is uploaded.'),
   S.ingesting ? h('span', { class: 'busy' }, `Reading ${S.ingesting} file(s)…`) : null);
 
   replace($('docs'),
     h('h2', null, h('span', { class: 'step' }, '2'), 'Documents'),
     isFrozen() ? h('div', { class: 'notice' }, h('strong', null, `Issued ${new Date(S.project.frozen!.issuedAt).toLocaleDateString('en-GB')}. `),
       'Page numbers are locked. New documents go in after a page you choose and are numbered 88-1, 88-2… (PD 5.6 para 1).',
-      ' ', h('button', { class: 'btn ghost small', dataset: { key: 'unlock' }, onclick: async () => { if (await confirmDialog('Unlock page numbers?', ['The whole bundle will be renumbered on the next build. Only do this if you will re-issue and re-lodge the bundle.'], 'Unlock')) { S.project = unfreezeProject(S.project); changed(); renderAll(); } } }, 'Unlock…')) : null,
-    missing.length ? h('div', { class: 'notice warn' }, h('strong', null, 'Add these files again to continue: '), missing.map((f) => f.name).join(', '),
-      h('span', { class: 'hint' }, ' They are recognised by content, so the file names can differ. If a file has changed, it will be added as a new document instead.')) : null,
+      ' ', h('button', { class: 'btn ghost small', dataset: { key: 'unlock' }, onclick: async () => { if (await confirmDialog('Unlock and renumber?', ['The whole bundle will be renumbered from page 1 on the next build, so earlier page references will change.', 'Only do this if you will issue, lodge and serve the whole bundle again.'], 'Unlock and renumber everything')) { S.project = unfreezeProject(S.project); changed(); renderAll(); } } }, 'Unlock…')) : null,
+    missing.length ? h('div', { class: 'notice warn' },
+      h('strong', null, `Your list is back. Now add the PDFs again (${p.files.length - missing.length} of ${p.files.length} added so far). `),
+      'Saved work does not keep the documents themselves. Use the "Add documents" box below; the order does not matter and renamed copies are fine. Still needed: ',
+      missing.map((f) => f.name).join(', '), '.') : null,
+    !p.docs.length ? h('p', { class: 'hint' }, 'Start here: add the PDFs for the bundle. You can fill in the case details before or after.') : null,
     drop,
+    S.addedNote && p.docs.length ? h('div', { class: 'notice' }, S.addedNote) : null,
+    S.undo ? h('div', { class: 'notice' }, `Removed "${S.undo.doc.description}". `,
+      h('button', { class: 'btn small', dataset: { key: 'undo' }, onclick: () => {
+        const u = S.undo!; S.undo = null;
+        S.project.docs.splice(Math.min(u.index, S.project.docs.length), 0, u.doc);
+        changed(); announce(`"${u.doc.description}" is back in the list.`);
+      } }, 'Undo'), ' ',
+      h('button', { class: 'btn ghost small', dataset: { key: 'undo-dismiss' }, onclick: () => { S.undo = null; changed(); } }, 'OK')) : null,
     S.fileErrors.length ? h('div', { class: 'notice bad' },
       h('ul', null, ...S.fileErrors.map((e) => h('li', null, e.message))),
       h('button', { class: 'btn ghost small', dataset: { key: 'errors-dismiss' }, onclick: () => { S.fileErrors = []; renderDocs(); } }, 'Dismiss')) : null,
@@ -732,15 +796,16 @@ function renderDocs() {
       h('button', { class: 'btn small', dataset: { key: 'sort' }, onclick: sortByDate, disabled: isFrozen() }, 'Sort by date'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', dataset: { key: 'sections-toggle' }, checked: p.settings.sectionsEnabled, onchange: (e: Event) => { p.settings.sectionsEnabled = (e.target as HTMLInputElement).checked; if (p.settings.sectionsEnabled && !p.sections.length) p.sections.push({ id: uid('s'), letter: 'A', title: 'Pleadings' }); changed(); renderSettings(); } }), 'Use sections'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', dataset: { key: 'arrows-toggle' }, checked: S.reorder === 'arrows', onchange: (e: Event) => { S.reorder = (e.target as HTMLInputElement).checked ? 'arrows' : 'drag'; renderDocs(); } }), 'Show move buttons'),
+      h('button', { class: 'linkbtn', dataset: { key: 'explain-status' }, onclick: () => showTerms() }, 'What do Status and Core bundle mean?'),
       h('span', { class: 'spacer' }),
-      h('span', { class: 'muted' }, `${p.docs.length} document(s), ${total} page(s)`),
-      h('button', { class: 'btn ghost small', dataset: { key: 'clear-all' }, disabled: isFrozen(), onclick: async () => { if (await confirmDialog('Remove all documents?', ['This removes every document from the list (the case details and cover page stay).'], 'Remove all')) { S.project.docs = []; S.zhOpen.clear(); S.dateDraft.clear(); changed(); } } }, 'Clear all')) : null,
+      h('span', { class: 'muted' }, `${p.docs.length} document${p.docs.length === 1 ? '' : 's'}, ${total} page${total === 1 ? '' : 's'}`),
+      h('button', { class: 'btn ghost small', dataset: { key: 'clear-all' }, disabled: isFrozen(), onclick: async () => { if (await confirmDialog('Remove all documents?', ['This removes every document from the list (the case details and cover page stay).'], 'Remove all')) { S.project.docs = []; S.zhOpen.clear(); S.dateDraft.clear(); changed(); } } }, 'Remove all documents…')) : null,
     p.settings.sectionsEnabled ? renderSections() : null,
     p.docs.length ? h('div', { class: 'tablewrap' }, h('table', { class: 'docs' },
       h('thead', null, h('tr', null,
         h('th', null, h('span', { class: 'sr' }, 'Reorder')), h('th', null, 'No.'), h('th', null, 'Date'), h('th', null, 'Description'),
         h('th', null, 'Type'), h('th', null, 'Status'), p.settings.sectionsEnabled ? h('th', null, 'Section') : null,
-        h('th', null, 'Core'), h('th', null, 'Pages'))),
+        h('th', null, 'Core bundle'), h('th', null, 'Pages'))),
       h('tbody', null, ...p.docs.map((d, i) => docRow(d, i, warn, frozenIds))))) : null,
     warn.size ? h('p', { class: 'warn' }, `${warn.size} document(s) are out of date order (PD 5.6 para 4(2)). "Sort by date" fixes this, or keep your order if the parties have agreed it.`) : null,
     total > 100 && !anyCore ? h('p', { class: 'notice' }, h('strong', null, 'Core bundle: '), `the documents come to ${total} pages. PD 5.6 para 2 says a core bundle should be prepared where the agreed bundle exceeds 100 pages: tick "Core" for the documents central to the dispute.`) : null,
@@ -791,8 +856,8 @@ function renderSettings() {
     h('details', { open: S.settingsOpen || null, ontoggle: (e: Event) => { S.settingsOpen = (e.target as HTMLDetailsElement).open; } }, h('summary', null, h('h2', null, h('span', { class: 'step' }, '3'), 'Settings', h('span', { class: 'summary-cue' }, ''), h('span', { class: 'muted small normal' }, 'Defaults follow PD 5.6; change only if needed.'))),
       h('div', { class: 'grid3' },
         h('fieldset', null, h('legend', null, 'Volumes and numbering'),
-          field('Pages per file', h('input', { type: 'number', min: 20, max: 1000, value: s.maxPagesPerVolume, onchange: (e: Event) => { s.maxPagesPerVolume = Math.max(20, Number((e.target as HTMLInputElement).value) || 250); changed({ docs: false }); } }), 'PD 5.6 para 5: never more than 250.'),
-          sel('Numbering', s.numbering, [['continuous', 'Consecutive across all files (1, 2, 3…)'], ['per-volume', 'Restart each file (A1, B1…)'], ...(s.sectionsEnabled || s.numbering === 'per-section' ? [['per-section', 'Restart each section (A1, B1…)'] as ['per-section', string]] : [])], (v) => { s.numbering = v; },
+          field('Pages per volume', h('input', { type: 'number', min: 20, max: 1000, value: s.maxPagesPerVolume, onchange: (e: Event) => { s.maxPagesPerVolume = Math.max(20, Number((e.target as HTMLInputElement).value) || 250); changed({ docs: false }); } }), 'Each volume (Bundle A, B…) is one file. PD 5.6 para 5: never more than 250 pages.'),
+          sel('Numbering', s.numbering, [['continuous', 'Consecutive across all files (1, 2, 3…)'], ['per-volume', 'Restart in each volume (A1, B1…)'], ...(s.sectionsEnabled || s.numbering === 'per-section' ? [['per-section', 'Restart each section (A1, B1…)'] as ['per-section', string]] : [])], (v) => { s.numbering = v; },
             s.sectionsEnabled ? undefined : 'Turn on "Use sections" (Documents) to restart numbering in each section.'),
           sel('Section label', s.sectionPrefix, [['Section', '"Section A"'], ['Part', '"Part A"'], ['', '"A"']], (v) => { s.sectionPrefix = v; }),
           chk('Status front sheet (PD 5.6 para 3)', s.frontSheet, (v) => { s.frontSheet = v; }),
@@ -800,20 +865,20 @@ function renderSettings() {
         h('fieldset', null, h('legend', null, 'Page numbers'),
           sel('Style', st.style, [['X', '12'], ['PageX', 'Page 12'], ['XofY', '12 of 300'], ['XslashY', '12/300'], ['PageXofY', 'Page 12 of 300'], ['None', 'None']], (v) => { st.style = v; }),
           sel('Position', st.position, [['top-right', 'Top right (PD 5.6)'], ['top-centre', 'Top centre'], ['top-left', 'Top left'], ['bottom-right', 'Bottom right'], ['bottom-centre', 'Bottom centre'], ['bottom-left', 'Bottom left']], (v) => { st.position = v; }),
-          field('Prefix', h('input', { type: 'text', value: st.prefix, placeholder: 'e.g. Exhibit A-', onchange: (e: Event) => { st.prefix = (e.target as HTMLInputElement).value; changed({ docs: false }); } })),
+          field('Text before the number (optional)', h('input', { type: 'text', value: st.prefix, placeholder: 'e.g. Exhibit A-', onchange: (e: Event) => { st.prefix = (e.target as HTMLInputElement).value; changed({ docs: false }); } })),
           sel('Size', st.size, [['S', 'Small'], ['M', 'Medium'], ['L', 'Large']], (v) => { st.size = v; }),
           sel('Colour', st.colour, [['black', 'Black'], ['red', 'Red'], ['blue', 'Blue']], (v) => { st.colour = v; })),
         h('fieldset', null, h('legend', null, 'Index and bookmarks'),
           sel('Date format', s.dateStyle, [['DD/MM/YYYY', '15/03/2024'], ['DD Month YYYY', '15 March 2024'], ['DD Mon. YYYY', '15 Mar. 2024'], ['YYYY-MM-DD', '2024-03-15'], ['DD-MM-YYYY', '15-03-2024'], ['MM/DD/YYYY', '03/15/2024'], ['Month DD, YYYY', 'March 15, 2024'], ['Mon. DD, YYYY', 'Mar. 15, 2024'], ['None', 'No date column']], (v) => { s.dateStyle = v; }),
-          sel('Bookmarks', s.outlineStyle, [['withDateAndPage', 'Title (date) — p. 12'], ['withPage', 'Title — p. 12'], ['withDate', 'Title (date)'], ['plain', 'Title']], (v) => { s.outlineStyle = v; }),
+          sel('PDF side-panel links (bookmarks)', s.outlineStyle, [['withDateAndPage', 'Title (date) — p. 12'], ['withPage', 'Title — p. 12'], ['withDate', 'Title (date)'], ['plain', 'Title']], (v) => { s.outlineStyle = v; }),
           sel('Heading size', s.index.headingSize, [['S', 'Small'], ['M', 'Medium'], ['L', 'Large']], (v) => { s.index.headingSize = v; }),
           sel('Table text size', s.index.tableSize, [['S', 'Small'], ['M', 'Medium'], ['L', 'Large']], (v) => { s.index.tableSize = v; }),
           chk('Table borders', s.index.borders, (v) => { s.index.borders = v; }),
           chk('English and 繁體中文 headings', s.bilingualHeadings, (v) => { s.bilingualHeadings = v; }),
-          h('p', { class: 'hint' }, 'Chinese text loads extra fonts (about 27 MB, once). Have the Chinese headings checked before lodging.'))),
+          h('p', { class: 'hint' }, 'Chinese text needs a one-off download of Chinese lettering from this site (about 27 MB), which may take a minute. Your documents are not sent anywhere. Have the Chinese headings checked before lodging.'))),
       h('div', { class: 'row' },
         h('button', { class: 'btn small', onclick: () => { announce(store.set(LS.defaults, JSON.stringify(s)) ? 'Saved as your defaults on this device.' : 'This browser does not allow saving settings.'); } }, 'Save as my defaults'),
-        h('button', { class: 'btn ghost small', onclick: () => { store.del(LS.defaults); announce('Saved defaults erased.'); } }, 'Erase saved defaults'),
+        h('button', { class: 'btn ghost small', onclick: () => { store.del(LS.defaults); announce('Your saved defaults are erased. New work will start with the PD 5.6 defaults.'); } }, 'Erase my saved defaults'),
         h('button', { class: 'btn ghost small', onclick: () => { S.project.settings = structuredClone(DEFAULT_SETTINGS); renderSettings(); changed(); announce('Settings reset to the PD 5.6 defaults.'); } }, 'Reset to PD 5.6 defaults'))));
 }
 
@@ -842,18 +907,18 @@ function renderBuild() {
     h('h2', null, h('span', { class: 'step' }, '4'), 'Build'),
     S.planError ? h('div', { class: 'notice bad' }, S.planError) : null,
     plan ? h('div', { class: 'plan' },
-      h('p', null, h('strong', null, `${plan.physicalFiles} file${plan.physicalFiles > 1 ? 's' : ''}: `),
+      h('p', null, h('strong', null, `This will make ${plan.physicalFiles} volume${plan.physicalFiles > 1 ? 's' : ''}: `),
         plan.volumes.map((v) => `${v.name} (pp. ${v.first}–${v.last}, ${v.pages} pages in all)`).join('; '), '.')) : null,
     !ready && !S.job ? h('p', { class: 'hint' }, !p.docs.length ? 'Add documents to build the bundle.' : missingFiles().length ? 'Add the missing files again (see Documents) to build.' : 'Reading files…') : null,
     S.fontsState === 'loading' ? h('p', { class: 'hint' }, 'Loading Chinese fonts (about 27 MB, once per visit)…') : null,
     S.fontsState === 'failed' ? h('p', { class: 'warn' }, 'The Chinese fonts could not be loaded; check the connection and try again.') : null,
     h('div', { class: 'row' },
-      h('button', { class: 'btn', dataset: { key: 'b-preview' }, disabled: !ready || !!S.job, onclick: () => runBuild({ prelimsOnly: true }) }, 'Preview index'),
       h('button', { class: 'btn primary', dataset: { key: 'b-build' }, disabled: !ready || !!S.job, onclick: () => runBuild() }, 'Build bundle'),
+      h('button', { class: 'btn', dataset: { key: 'b-preview' }, disabled: !ready || !!S.job, onclick: () => runBuild({ prelimsOnly: true }) }, 'Preview index only'),
       h('button', { class: 'btn', dataset: { key: 'b-issue' }, disabled: !ready || !!S.job, onclick: () => runBuild({ issue: true }), title: 'Build and lock the page numbers for later 88-1 inserts' }, isFrozen() ? 'Build and re-issue' : 'Build and issue…')),
     h('ul', { class: 'btn-help' },
-      h('li', null, h('b', null, 'Preview index'), ': just the front sheet and index pages, to check them quickly.'),
-      h('li', null, h('b', null, 'Build bundle'), ': every volume with its index, plus the Word index, spine labels and a compliance report, in one ZIP.'),
+      h('li', null, h('b', null, 'Build bundle'), ': makes the whole bundle, with its index, a Word copy of the index, spine labels and a checklist against PD 5.6, ready to download.'),
+      h('li', null, h('b', null, 'Preview index only'), ': makes just the index pages, so you can check them quickly first.'),
       h('li', null, h('b', null, isFrozen() ? 'Build and re-issue' : 'Build and issue'), isFrozen()
         ? ': the same, and locks the numbers given to documents added since the last issue.'
         : ': the same, and locks every page number, so documents added later go in as 88-1, 88-2 without renumbering. Use it when the bundle is final.')),
@@ -861,30 +926,38 @@ function renderBuild() {
       h('progress', { id: 'progress', max: S.job.total, value: S.job.done }),
       h('span', { id: 'progress-label' }, `${S.job.label}…`),
       h('button', { class: 'btn small', dataset: { key: 'b-cancel' }, onclick: () => { worker.postMessage({ type: 'cancel' } satisfies ToWorker); announce('Cancelling.'); } }, 'Cancel')) : null,
+    S.issuedNow && S.results ? h('div', { class: 'notice warn' },
+      h('strong', null, 'Bundle issued: the page numbers are now locked. '),
+      'Save your work now. You will need it to add late documents (88-1, 88-2) without renumbering. ',
+      h('button', { class: 'btn small primary', dataset: { key: 'issued-save' }, onclick: saveProject }, 'Save work')) : null,
     S.results ? h('div', { class: 'results' },
-      h('h3', null, S.results.preview ? 'Index preview' : 'Your bundle'),
+      h('h3', null, S.results.preview ? 'Index preview' : 'Your bundle is ready'),
       S.results.zip ? h('p', { class: 'row' },
-        h('a', { class: 'btn primary', href: S.results.zip.url, download: S.results.zip.fileName }, 'Download everything (ZIP)'),
+        h('a', { class: 'btn primary', href: S.results.zip.url, download: S.results.zip.fileName, onclick: () => { S.savedRev = S.rev; } }, 'Download the bundle'),
         h('span', { class: 'muted' }, ` ${S.results.zip.fileName}, ${kb(S.results.zip.size)}`)) : null,
+      S.results.zip ? h('ol', { class: 'next-steps' },
+        h('li', null, 'Press ', h('b', null, 'Download the bundle'), '. It saves one ZIP file (a folder packed into a single file) to your Downloads.'),
+        h('li', null, 'Double-click the ZIP to open it. Inside are the bundle PDFs (Bundle A, Bundle B…), the index in Word, the spine labels and the PD 5.6 checklist.'),
+        h('li', null, 'Open each bundle PDF and check it before you lodge or serve it.'),
+        h('li', null, 'Keep the ZIP: it also holds your saved work, so you can add documents later with "Open saved work".')) : null,
       h('details', { open: S.results.preview || null },
-        h('summary', { class: 'small linkish-summary' }, S.results.preview ? `Files (${S.results.files.length})` : `Download files one by one (${S.results.files.length})`),
+        h('summary', { class: 'small linkish-summary' }, S.results.preview ? `Index preview files (${S.results.files.length})` : `Or download the files one by one (${S.results.files.length})`),
         h('ul', { class: 'files' }, ...S.results.files.map((f) => h('li', null,
           h('a', { href: f.url, download: f.fileName }, f.fileName),
           h('span', { class: 'muted' }, ` ${f.pageCount ? `${f.pageCount} pages, ` : ''}${kb(f.size)}`),
           f.fileName.endsWith('.pdf') ? [' ', h('a', { href: f.url, target: '_blank', rel: 'noopener', class: 'small' }, 'Open')] : null)))),
       S.results.checks ? h('div', { class: 'compliance' },
-        h('h3', null, 'PD 5.6 compliance report'),
+        h('h3', null, 'Checklist against PD 5.6'),
+        h('p', { class: 'hint' }, '"Warning" means something to look at before lodging, not an error.'),
         h('div', { class: 'reportwrap' }, h('table', { class: 'report' },
           h('thead', null, h('tr', null, h('th', null, 'Para'), h('th', null, 'Requirement'), h('th', null, 'Result'), h('th', null, 'Detail'))),
           h('tbody', null, ...S.results.checks.map((c) => h('tr', { class: c.status === 'warning' ? 'oo' : '' },
             h('td', null, c.para), h('td', null, c.requirement),
             h('td', null, h('span', { class: `badge ${c.status === 'warning' ? 'warn' : c.status === 'pass' ? '' : 'muted'}` }, c.status === 'pass' ? 'Pass' : c.status === 'warning' ? 'Warning' : 'Not applicable')),
             h('td', { class: 'small' }, c.detail))))))) : null,
-      !S.results.preview ? h('div', { class: 'row' },
-        h('button', { class: 'btn small', onclick: saveProject }, 'Save project file'),
-        h('span', { class: 'muted small' }, 'The ZIP already contains the project file.')) : null) : null,
+      S.results.preview ? h('p', { class: 'hint' }, 'Open a preview file to check the index. When it looks right, press "Build bundle".') : null) : null,
     resultWarnings.length ? h('div', { class: 'checks' },
-      h('h3', null, `Checks (${resultWarnings.length})`),
+      h('h3', null, `Please look at these before lodging (${resultWarnings.length})`),
       h('ul', null, ...resultWarnings.map((w) => h('li', { class: sevCodes.has(w.code) ? 'warn' : '' }, w.message)))) : null);
   updateProgress();
 }
@@ -906,8 +979,8 @@ function renderFooter() {
           announce('Remembered project details erased.');
         }
       },
-    }), 'Remember project details in this browser'),
-    h('span', { class: 'hint' }, ' Stores only the list, dates, descriptions and settings on this device, never document contents. Untick to erase.'));
+    }), 'Remember my work in this browser'),
+    h('span', { class: 'hint' }, ' Keeps the list, dates, descriptions and settings on this computer, never the documents. Untick to erase.'));
 }
 
 function offerRestore() {
@@ -917,7 +990,7 @@ function offerRestore() {
     const { project } = parseProject(saved);
     if (!project.docs.length) return;
     replace($('restore'),
-      h('div', { class: 'notice' }, `Continue "${project.case.shortTitle || project.case.actionNo || 'your last project'}" (${project.docs.length} documents)? You will need to add the files again.`,
+      h('div', { class: 'notice' }, `Carry on with "${project.case.shortTitle || project.case.actionNo || 'your last work'}" (${project.docs.length} documents)? Your list will come back; then add the same PDFs again.`,
         ' ', h('button', { class: 'btn small', onclick: () => { adoptProject(project); replace($('restore')); } }, 'Continue'),
         ' ', h('button', { class: 'btn ghost small', onclick: () => replace($('restore')) }, 'Not now')));
   } catch { /* ignore a corrupt autosave */ }
@@ -953,7 +1026,7 @@ function tourSteps(): TourStep[] {
     {
       title: 'How Big Bundle Wright works',
       body: [p('This walk-through takes about two minutes. It goes through the four parts of the page: case details, documents, settings and build.'),
-        p('Two words first. Your project is the working list on this page: case details, documents and settings. The bundle is what you get at the end: numbered PDF files with an index, ready to lodge.'),
+        p('Two words first. Your work is the list you build on this page: case details, documents and settings. The bundle is what you get at the end: numbered PDF files with an index, ready to lodge.'),
         p('You can follow along with your own files, or with a few example documents made on this device.')],
       actions: S.project.docs.length ? undefined : [{ label: 'Use example documents', run: loadExamples }, { label: 'Use my own files', primary: true, run: () => undefined }],
     },
@@ -970,7 +1043,7 @@ function tourSteps(): TourStep[] {
     {
       target: () => document.querySelector('#docs table.docs tbody tr') ?? document.querySelector('#docs'), title: 'Check the list',
       body: [p('Each row is one document, in bundle order. Check its date and description, and choose its status under PD 5.6 para 3.'),
-        p('To reorder, drag the handle at the left, or focus it and press Alt with the up or down arrow. Tick Core for the documents central to the dispute.')],
+        p('To move a document, use the up and down arrows at the left of its row, or drag the dotted grip. Tick "Core bundle" for the documents central to the dispute.')],
     },
     {
       target: () => document.querySelector('#docs tbody tr td.desc') ?? document.querySelector('#docs'), title: 'What each row tells you',
@@ -985,17 +1058,17 @@ function tourSteps(): TourStep[] {
       target: () => document.querySelector('#build .row') ?? document.querySelector('#build'), title: 'Build the bundle',
       body: [h('ul', null,
         h('li', null, h('b', null, 'Preview index'), ' builds just the index pages, to check them quickly.'),
-        h('li', null, h('b', null, 'Build bundle'), ' gives one ZIP: every volume, the Word index, spine labels and a compliance report.'),
+        h('li', null, h('b', null, 'Build bundle'), ' makes the whole bundle, ready to download, with a Word copy of the index, spine labels and a PD 5.6 checklist.'),
         h('li', null, h('b', null, 'Build and issue'), ' also locks the page numbers, so late documents go in as 88-1, 88-2 without renumbering.'))],
     },
     {
-      target: q('#hdr-actions'), title: 'Save your project',
-      body: [p('Save the project file to come back later. It is a small file holding the list, dates, descriptions and settings, never the documents themselves.'),
-        p('When you open it again, add the same files; they are recognised by their content, even if renamed.')],
+      target: q('#hdr-actions'), title: 'Save your work',
+      body: [p('Press "Save work" to come back later. It saves a small file with the list, dates, descriptions and settings, never the documents themselves.'),
+        p('To carry on, press "Open saved work", choose that file, then add the same PDFs again; they are recognised even if renamed.')],
     },
     {
       target: q('#terms'), title: 'What the words mean',
-      body: [p('Not sure what "issue", "volume" or "core bundle" means? This section explains each term in plain English.')],
+      body: [p('Not sure what "issue", "volume" or "core bundle" means? This section explains each word in plain English.')],
     },
     {
       title: 'That is the whole process',
@@ -1008,6 +1081,17 @@ function openTour() {
   if (tourIsOpen() || S.job) return;
   startTour(tourSteps(), { onClose: () => { store.set(LS.toured, '1'); renderGuide(); } });
 }
+
+/** Open "What is a project, a bundle…" and bring it into view. */
+function showTerms() {
+  const d = document.querySelector<HTMLDetailsElement>('#terms details');
+  if (d) { d.open = true; d.scrollIntoView({ block: 'start' }); d.querySelector('summary')?.focus(); }
+}
+
+// Warn before closing the tab with work that has not been saved.
+window.addEventListener('beforeunload', (e) => {
+  if (S.project.docs.length && S.rev !== S.savedRev && store.get(LS.autosave) !== '1') { e.preventDefault(); e.returnValue = ''; }
+});
 
 startWorker();
 for (const img of document.querySelectorAll<HTMLImageElement>('img.brand-icon')) img.src = iconUrl;

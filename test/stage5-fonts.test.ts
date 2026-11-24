@@ -121,7 +121,7 @@ describe('bilingual headings', () => {
     p.settings.bilingualHeadings = true;
     const r = await buildBundle({ project: p, sources: base.sources, date: FIXED, prelimsOnly: true });
     expect(r.bilingual).toBe(false);
-    expect(r.warnings.some((w) => w.code === 'unsupported-glyph' && /Bilingual/.test(w.message))).toBe(true);
+    expect(r.warnings.some((w) => w.code === 'unsupported-glyph' && /English and Chinese headings/.test(w.message))).toBe(true);
     const t = (await readText(r.volumes[0].bytes)).map((x) => x.text).join(' ');
     expect(t).toContain('INDEX');
     expect(t).not.toContain('?');

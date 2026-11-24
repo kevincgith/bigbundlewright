@@ -100,7 +100,7 @@ function validateShape(project: Project) {
       && (b.volumes as { pages?: unknown; rows?: unknown; letter?: unknown }[]).every((v) => v && isStr(v.letter) && Array.isArray(v.pages) && v.pages.length > 0 && Array.isArray(v.rows));
     if (!isStr(fz.issuedAt) || !fz.fileHashes || typeof fz.fileHashes !== 'object' || !bundles || !okVolumes(bundles.main)
       || (bundles.core !== undefined && !okVolumes(bundles.core)) || (bundles.transcripts !== undefined && !okVolumes(bundles.transcripts))) {
-      throw new ProjectError('The issued layout in this project file is damaged. Open an earlier copy of the project, or remove the "frozen" section to unlock and re-issue.');
+      throw new ProjectError('The issued page numbers in this saved file cannot be read; the issued layout is damaged. Open an earlier saved copy.');
     }
   }
 }

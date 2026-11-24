@@ -76,7 +76,7 @@
 
 * { box-sizing: border-box; }
 html { background: var(--bg); }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-ui); -webkit-font-smoothing: antialiased; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 var(--f-ui); -webkit-font-smoothing: antialiased; }
 .wrap {
   max-width: 1160px; margin: 0 auto;
   padding-left: max(20px, env(safe-area-inset-left, 0px));
@@ -124,6 +124,13 @@ details[open] > summary h2 { margin-bottom: 16px; }
 .summary-cue::after { content: "Show"; font: 500 13px var(--f-ui); color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
 details[open] > summary .summary-cue::after { content: "Hide"; }
 
+/* Start panel */
+.start-steps { margin: 4px 0 0; padding-left: 22px; display: grid; gap: 4px; }
+.start-steps li::marker { font-family: var(--f-mono); color: var(--accent); }
+.pd-brief { margin-top: 14px; }
+.pd-brief > summary { color: var(--link); text-decoration: underline; text-underline-offset: 2px; width: max-content; margin-bottom: 8px; }
+.next-steps { margin: 4px 0 10px; padding-left: 22px; color: var(--paper-ink); display: grid; gap: 4px; font-size: 15px; }
+
 /* PD 5.6 in brief: a plain two-column list. */
 .guide-card { padding: 18px 24px; }
 .guide-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
@@ -152,8 +159,8 @@ details[open] > summary .summary-cue::after { content: "Hide"; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px 28px; }
 .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; }
 .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; min-width: 0; }
-.lbl { font-weight: 500; font-size: 13px; color: var(--muted); }
-.hint { font-size: 12.5px; color: var(--faint); }
+.lbl { font-weight: 600; font-size: 14px; color: var(--muted); }
+.hint { font-size: 14px; color: var(--faint); }
 .stack { display: flex; flex-direction: column; gap: 6px; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .options { margin-top: 4px; }
@@ -180,7 +187,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
 
 /* ---------- buttons and links ---------- */
 .btn {
-  font: 600 13.5px var(--f-ui); color: var(--ink); cursor: pointer; text-decoration: none;
+  font: 600 14.5px var(--f-ui); color: var(--ink); cursor: pointer; text-decoration: none;
   border: 1px solid var(--rule-strong); background: transparent; border-radius: 5px; padding: 7px 14px;
   display: inline-flex; align-items: center; gap: 6px;
 }
@@ -188,10 +195,10 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.primary:hover:not(:disabled) { background: var(--accent-hi); border-color: var(--accent-hi); }
 .btn.ghost { border-color: transparent; }
-.btn.small { padding: 4px 10px; font-size: 12.5px; }
+.btn.small { padding: 5px 11px; font-size: 13.5px; }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 .linkish { border: 0; background: none; color: inherit; cursor: pointer; padding: 0 2px; }
-.linkbtn { border: 0; background: none; padding: 0; cursor: pointer; text-align: left; font: 500 12.5px var(--f-ui); color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.linkbtn { border: 0; background: none; padding: 0; cursor: pointer; text-align: left; font: 500 14px var(--f-ui); color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
 .linkbtn:hover:not(:disabled) { color: var(--accent-hi); }
 .linkbtn.danger { color: var(--bad); }
 .linkbtn:disabled { color: var(--faint); text-decoration: none; cursor: not-allowed; }
@@ -204,7 +211,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
 .notice.warn { border-left-color: var(--warn); background: var(--warn-bg); }
 .notice.bad { border-left-color: var(--bad); background: var(--bad-bg); }
 .notice ul { margin: 0 0 6px; padding-left: 18px; }
-.badge { font: 500 11.5px var(--f-mono); padding: 1px 6px; border-radius: 3px; white-space: nowrap; color: var(--muted); border: 1px solid var(--rule-strong); }
+.badge { font: 500 12.5px var(--f-ui); padding: 1px 6px; border-radius: 3px; white-space: nowrap; color: var(--muted); border: 1px solid var(--rule-strong); }
 .badge.warn { color: var(--warn); border-color: var(--warn-line); background: var(--warn-bg); }
 .badge.bad { color: var(--bad); border-color: var(--bad-line); background: var(--bad-bg); }
 .badge.muted { color: var(--faint); }

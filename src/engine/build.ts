@@ -385,7 +385,7 @@ export async function buildBundle(input: BuildInput): Promise<BuildOutput> {
   const plan = await planProject(project, input.fonts);
 
   const warnings: BuildWarning[] = [...plan.warnings];
-  if (!input.analysis) warnings.push({ code: 'analysis-skipped', message: 'Page analysis was skipped: occupied corners, image-only pages and edge content were not checked.' });
+  if (!input.analysis) warnings.push({ code: 'analysis-skipped', message: 'The pages were not checked for scans, text near the edge or text where the page number goes. Look over the bundle yourself before lodging.' });
 
   const notes: Notes = new Map();
   const unsupported = new Set<string>();
@@ -409,21 +409,21 @@ export async function buildBundle(input: BuildInput): Promise<BuildOutput> {
   const docs = new Map(project.docs.map((d) => [d.id, d]));
   for (const [docId, e] of notes) {
     const d = docs.get(docId)!;
-    if (e.imageOnly.length) warnings.push({ code: 'image-only', docId, pages: e.imageOnly, message: `"${d.description}": page(s) ${rangesFromLabels(e.imageOnly)} are images with no text layer (not searchable). Check legibility (PD 5.6 paras 4(4), 6); attach a typed copy if needed.` });
-    if (e.edge.length) warnings.push({ code: 'edge-content', docId, pages: e.edge, message: `"${d.description}": page(s) ${rangesFromLabels(e.edge)} have content within 5 mm of the edge, which binding or copying may cut off (PD 5.6 para 6).` });
+    if (e.imageOnly.length) warnings.push({ code: 'image-only', docId, pages: e.imageOnly, message: `"${d.description}": page(s) ${rangesFromLabels(e.imageOnly)} are scanned pictures, so the words cannot be searched. Check they are easy to read (PD 5.6 paras 4(4), 6); if not, attach a typed copy.` });
+    if (e.edge.length) warnings.push({ code: 'edge-content', docId, pages: e.edge, message: `"${d.description}": page(s) ${rangesFromLabels(e.edge)} have text within 5 mm of the edge, which may be cut off when copied or bound (PD 5.6 para 6).` });
     if (e.shrunk.length) warnings.push({ code: 'shrunk-for-stamp', docId, pages: e.shrunk, message: `"${d.description}": page(s) ${rangesFromLabels(e.shrunk)} had content where the page number goes, so the page was reduced slightly to keep the number clear.` });
-    if (e.relaid.length) warnings.push({ code: 'relaid-annotations-dropped', docId, pages: e.relaid, message: `"${d.description}": page(s) ${rangesFromLabels(e.relaid)} were re-laid onto A4; links or comments on those pages were not carried over.` });
+    if (e.relaid.length) warnings.push({ code: 'relaid-annotations-dropped', docId, pages: e.relaid, message: `"${d.description}": page(s) ${rangesFromLabels(e.relaid)} were resized to A4; any comments or links on those pages were left out.` });
   }
   if (unsupported.size) {
     warnings.push({
       code: 'unsupported-glyph',
       message: input.fonts
-        ? `Index text contains characters the Noto TC fonts cannot show (${[...unsupported].join(' ')}); they were replaced with "?".`
-        : `Index text contains characters the standard fonts cannot show (${[...unsupported].join(' ')}); they were replaced with "?". Chinese text needs the Noto TC fonts (BuildInput.fonts).`,
+        ? `Some characters in the index could not be printed and show as "?" (${[...unsupported].join(' ')}). Check those descriptions.`
+        : `Some characters in the index could not be printed and show as "?" (${[...unsupported].join(' ')}). Check those descriptions; Chinese text needs the Chinese lettering, which loads automatically in the browser.`,
     });
   }
   if (project.settings.bilingualHeadings && !input.fonts) {
-    warnings.push({ code: 'unsupported-glyph', message: 'Bilingual headings are on, but the Chinese fonts were not supplied, so the headings are in English only.' });
+    warnings.push({ code: 'unsupported-glyph', message: 'English and Chinese headings are switched on, but the Chinese lettering could not be loaded, so the headings are in English only.' });
   }
 
   let masterIndex: BuiltFile | undefined;
