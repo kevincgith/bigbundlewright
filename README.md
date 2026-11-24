@@ -18,7 +18,11 @@ file names, and build:
 - a master index linking into every volume;
 - a core bundle (C1, C2…) and a separate transcript bundle (T1, T2…);
 - page numbers in the top right-hand corner on a white box, with links from every index entry and
-  bookmarks showing page numbers.
+  bookmarks showing page numbers;
+- one ZIP with every volume, the master index, Word (.docx) indexes, spine and inside-cover labels,
+  a PD 5.6 compliance report (PDF and JSON) and the project file.
+
+Chinese (Traditional) text and optional English/繁體中文 headings are supported.
 
 Once a bundle is issued, its page numbers are locked: later documents go in as 88-1, 88-2…
 without renumbering anything.
@@ -78,10 +82,14 @@ command line:
 
 ```bash
 node cli/cli.ts init <folder> --action "HCA 1234/2025" --title "Chan v Wong"
-node cli/cli.ts build <folder>/project.json --out <output folder> [--issue]
+node cli/cli.ts build <folder>/project.json --out <output folder> [--issue] [--zip] [--no-fonts]
 node cli/cli.ts issue <folder>/project.json
 node cli/cli.ts deadline 2026-04-08
 ```
+
+Chinese text uses the vendored Noto Serif TC / Noto Sans TC fonts in [`fonts/`](fonts/README.md)
+(SIL OFL 1.1), subset-embedded so only the characters used go into each PDF. The browser loads
+them only when a project needs them (Chinese text or bilingual headings).
 
 Design notes and decisions: [docs/stage-1-design.md](docs/stage-1-design.md).
 
@@ -101,7 +109,9 @@ code has been copied; any file adapted from BunTool will keep its MPL notice and
 This project is not affiliated with or endorsed by BunTool.
 
 Third-party components, all bundled: [pdf-lib](https://github.com/Hopding/pdf-lib) and fontkit
-(MIT), [pdf.js](https://github.com/mozilla/pdf.js) (Apache-2.0).
+(MIT), [pdf.js](https://github.com/mozilla/pdf.js) (Apache-2.0), [docx](https://github.com/dolanmiu/docx)
+(MIT), [JSZip](https://github.com/Stuk/jszip) (MIT, used under its MIT option), and the Noto Serif TC and
+Noto Sans TC fonts (SIL Open Font License 1.1; modified static instances, see `fonts/README.md`).
 
 Hong Kong general holiday data: HKSAR Government, <https://www.1823.gov.hk/common/ical/en.json>
 (snapshot 24 Nov 2026, covering 2025-2027).

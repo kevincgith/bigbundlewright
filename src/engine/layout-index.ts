@@ -129,13 +129,17 @@ export function layoutIndex(
   const rule = (w = 0.75) => page.ops.push({ t: 'line', x1: MARGIN, y1: y, x2: PW - MARGIN, y2: y, w });
 
   const tableHeader = () => {
-    const h = lead + 2 * padY;
+    // Titles may be two lines ("No.\n編號") when headings are bilingual.
+    const titles = columns.map((c) => c.title.split('\n'));
+    const h = Math.max(...titles.map((t) => t.length)) * lead + 2 * padY;
     page.ops.push({ t: 'rect', x: MARGIN, y: y - h, w: W, h, grey: 0.88 });
     columns.forEach((c, i) => {
-      const lineW = tw(c.title, 'bold', fs);
-      const x = c.align === 'right' ? colX[i] + colW[i] - padX - lineW
-        : c.align === 'center' ? colX[i] + (colW[i] - lineW) / 2 : colX[i] + padX;
-      text(c.title, x, y - padY - fs * 0.85, fs, 'bold');
+      titles[i].forEach((ln, j) => {
+        const lineW = tw(ln, 'bold', fs);
+        const x = c.align === 'right' ? colX[i] + colW[i] - padX - lineW
+          : c.align === 'center' ? colX[i] + (colW[i] - lineW) / 2 : colX[i] + padX;
+        text(ln, x, y - padY - fs * 0.85 - j * lead, fs, 'bold');
+      });
     });
     y -= h;
     page.ops.push({ t: 'line', x1: MARGIN, y1: y, x2: PW - MARGIN, y2: y, w: 0.6 });

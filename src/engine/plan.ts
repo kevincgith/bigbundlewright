@@ -10,6 +10,7 @@ import {
 } from './model.ts';
 import type { IndexColumn, IndexRow } from './layout-index.ts';
 import { formatDate, rangesFromLabels, volumeLetter } from './util.ts';
+import { ZH, bi } from './i18n.ts';
 
 export type { PlanEntry, PlanPage, PlanRow, PlanSectionRow };
 
@@ -104,9 +105,10 @@ export const FRONT_COLUMNS: IndexColumn[] = [
 
 export const formatDateFor = (p: Project, iso: string | null) => formatDate(iso, p.settings.dateStyle);
 
-export function sectionTitle(project: Project, s: Section, continued: boolean): string {
+export function sectionTitle(project: Project, s: Section, continued: boolean, bilingual = false): string {
   const prefix = project.settings.sectionPrefix ? `${project.settings.sectionPrefix} ` : '';
-  return `${prefix}${s.letter}  ${s.title}${continued ? ' (continued)' : ''}`;
+  const zh = bilingual && s.titleZh ? `  ${s.titleZh}` : '';
+  return `${prefix}${s.letter}  ${s.title}${zh}${continued ? (bilingual ? ' (continued)（續）' : ' (continued)') : ''}`;
 }
 
 export function entryDescription(doc: BundleDoc, part?: { n: number; of: number }): string {
@@ -136,13 +138,13 @@ export function crossRefs(main: BundlePlan): CrossRef {
 }
 
 /** Index rows for one volume (or any list of plan rows). */
-export function indexRows(project: Project, rows: PlanRow[], xref?: CrossRef): IndexRow[] {
+export function indexRows(project: Project, rows: PlanRow[], xref?: CrossRef, bilingual = false): IndexRow[] {
   const docs = new Map(project.docs.map((d) => [d.id, d]));
   const secs = new Map(project.sections.map((s) => [s.id, s]));
   return rows.map((r): IndexRow => {
     if (r.kind === 'section') {
       const s = secs.get(r.sectionId);
-      return { kind: 'section', cells: {}, title: s ? sectionTitle(project, s, r.continued) : 'Other documents' };
+      return { kind: 'section', cells: {}, title: s ? sectionTitle(project, s, r.continued, bilingual) : 'Other documents' };
     }
     const d = docs.get(r.docId)!;
     return {
@@ -151,7 +153,7 @@ export function indexRows(project: Project, rows: PlanRow[], xref?: CrossRef): I
         tab: r.tab,
         date: formatDate(d.date, project.settings.dateStyle),
         description: entryDescription(d, r.part),
-        status: STATUS_LABEL[d.status],
+        status: bi(bilingual, STATUS_LABEL[d.status], ZH.status[d.status]),
         pages: pageRange(r.firstLabel || '8888', r.lastLabel || '8888'),
         ...(xref ? { bundle: xref.get(r.docId) ?? '' } : {}),
       },
@@ -175,7 +177,7 @@ export function mergeRanges(ranges: [string, string][]): string {
 }
 
 /** PD 5.6 para 3 front sheet: one row per status category. */
-export function frontSheetRows(project: Project, rows: PlanRow[]): IndexRow[] {
+export function frontSheetRows(project: Project, rows: PlanRow[], bilingual = false): IndexRow[] {
   const docs = new Map(project.docs.map((d) => [d.id, d]));
   const entries = rows.filter((r): r is PlanEntry => r.kind === 'doc');
   return STATUS_ORDER.map((st) => {
@@ -184,8 +186,8 @@ export function frontSheetRows(project: Project, rows: PlanRow[]): IndexRow[] {
     return {
       kind: 'doc',
       cells: {
-        status: STATUS_FRONT[st],
-        description: mine.length ? `No${mine.length > 1 ? 's' : ''}. ${tabs}` : 'None',
+        status: bi(bilingual, STATUS_FRONT[st], ZH.statusFront[st]),
+        description: mine.length ? `No${mine.length > 1 ? 's' : ''}. ${tabs}` : bi(bilingual, 'None', ZH.none),
         pages: mine.length ? mergeRanges(mine.map((e) => [e.firstLabel || '8888', e.lastLabel || '8888'])) : '—',
       },
     };

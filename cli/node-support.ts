@@ -4,10 +4,11 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import {
-  analysePdf, loadSource, parseFileName, SourceError, DEFAULT_SETTINGS, matchSources, describeMatch,
-  type BundleDoc, type LoadedSource, type PageAnalysis, type Project,
+  analysePdf, loadSource, parseFileName, SourceError, DEFAULT_SETTINGS, matchSources, describeMatch, FONT_FILES,
+  type BundleDoc, type FontBytes, type LoadedSource, type PageAnalysis, type Project,
 } from '../src/engine/index.ts';
 
 const require = createRequire(import.meta.url);
@@ -17,6 +18,19 @@ export const PDFJS_ASSETS = {
   cMapUrl: join(pdfjsRoot, 'cmaps') + '/',
   wasmUrl: join(pdfjsRoot, 'wasm') + '/',
 };
+
+/** The vendored Noto TC fonts at the repo root. */
+export const FONTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'fonts');
+
+/** Read the vendored Noto TC fonts (fonts/) for BuildInput.fonts. */
+export async function loadFonts(dir = FONTS_DIR): Promise<FontBytes> {
+  const read = async (name: string) => new Uint8Array(await readFile(join(dir, name)));
+  return {
+    serifRegular: await read(FONT_FILES.serifRegular),
+    serifBold: await read(FONT_FILES.serifBold),
+    sansBold: await read(FONT_FILES.sansBold),
+  };
+}
 
 export const INPUT_EXT = /\.(pdf|png|jpe?g)$/i;
 
