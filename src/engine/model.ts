@@ -42,6 +42,16 @@ export interface BundleDoc {
   status: DocStatus;
   core: boolean;
   sectionId?: string;
+  /**
+   * PD 5.6 para 6: typed copies of illegible pages, interleaved after source page
+   * `afterPage` (1-based). Each refers to a file in `Project.files`.
+   */
+  typedCopies?: { afterPage: number; fileId: string }[];
+  /**
+   * PD 5.6 para 1: once the bundle is issued (frozen), insert this document after the
+   * page with this stamped label, numbered "88-1, 88-2…". Ignored before issue.
+   */
+  insertAfter?: string;
 }
 
 export interface Section {
@@ -91,6 +101,8 @@ export interface Settings {
   index: { headingSize: Size; tableSize: Size; borders: boolean };
   /** BunTool "printable mode": blank page after odd-length documents. */
   printable: boolean;
+  /** PD 5.6 para 3 status front sheet at the front of each main and core volume. */
+  frontSheet: boolean;
 }
 
 export interface Project {
@@ -101,6 +113,58 @@ export interface Project {
   /** In bundle order. */
   docs: BundleDoc[];
   sections: Section[];
+  /** Set when the bundle is issued: page numbers are locked from then on. */
+  frozen?: FrozenLayout;
+}
+
+export type BundleKind = 'main' | 'core' | 'transcripts';
+
+export interface PlanPage {
+  kind: 'doc' | 'blank';
+  docId?: string;
+  fileId?: string;
+  /** 0-based page index in the source file. */
+  srcIndex?: number;
+  /** Stamped label, e.g. "12", "A12", "C3", "88-1". */
+  label: string;
+  /** Numbering series ("" for continuous main, else a letter prefix) for "of Y" styles. */
+  series: string;
+}
+
+export interface PlanEntry {
+  kind: 'doc';
+  docId: string;
+  /** Index number shown in the "No." column: "7", or "7-1" for an insert. */
+  tab: string;
+  part?: { n: number; of: number };
+  /** Index into the volume's content pages of the first page, and the span to the last. */
+  first: number;
+  count: number;
+  firstLabel: string;
+  lastLabel: string;
+}
+
+export interface PlanSectionRow {
+  kind: 'section';
+  sectionId: string;
+  continued: boolean;
+}
+
+export type PlanRow = PlanEntry | PlanSectionRow;
+
+export interface FrozenVolume {
+  letter: string;
+  rows: PlanRow[];
+  pages: PlanPage[];
+}
+
+export interface FrozenLayout {
+  issuedAt: string;
+  /** sha256 of every file used, by file id: content may not change after issue. */
+  fileHashes: Record<string, string>;
+  /** Description of each issued document, by id (for messages if one is later removed). */
+  docTitles?: Record<string, string>;
+  bundles: Partial<Record<BundleKind, { volumes: FrozenVolume[] }>>;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -114,6 +178,7 @@ export const DEFAULT_SETTINGS: Settings = {
   stamp: { style: 'X', prefix: '', position: 'top-right', size: 'M', colour: 'black' },
   index: { headingSize: 'M', tableSize: 'M', borders: true },
   printable: false,
+  frontSheet: true,
 };
 
 /** Per-page facts gathered from the source before building. */
@@ -143,7 +208,13 @@ export type WarningCode =
   | 'non-compliant-setting'
   | 'unsupported-glyph'
   | 'analysis-skipped'
-  | 'deferred-feature';
+  | 'deferred-feature'
+  | 'core-bundle-needed'
+  | 'volume-over-limit'
+  | 'appended-after-issue'
+  | 'insert-before-issue'
+  | 'inside-cover-labels'
+  | 'hash-mismatch';
 
 export interface BuildWarning {
   code: WarningCode;
@@ -155,6 +226,14 @@ export interface BuildWarning {
 }
 
 export type SourceErrorCode = 'encrypted' | 'corrupt' | 'unsupported' | 'empty' | 'missing' | 'hash-mismatch';
+
+/** A problem with the project itself (bad JSON, broken references, a change not allowed after issue). */
+export class ProjectError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProjectError';
+  }
+}
 
 export class SourceError extends Error {
   readonly fileName: string;

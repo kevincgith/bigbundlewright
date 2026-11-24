@@ -5,14 +5,18 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { buildBundle, describeDeadline, lodgingDeadline, SourceError, type PageAnalysis, type Project } from '../src/engine/index.ts';
+import {
+  buildBundle, describeDeadline, lodgingDeadline, parseProject, planProject, freezeProject, serializeProject,
+  ProjectError, SourceError, type PageAnalysis,
+} from '../src/engine/index.ts';
 import { analyse, initProject, loadProjectSources } from './node-support.ts';
 
 const HELP = `Big Bundle Wright: court bundles fit for a 大狀 (PD 5.6)
 
 Usage:
   bigbundle-wright init <folder> [-o project.json] [--action "HCA 1234/2025"] [--title "Chan v Wong"]
-  bigbundle-wright build <project.json> [--files <folder>] [--out <folder>] [--limit 250] [--no-analyse]
+  bigbundle-wright build <project.json> [--files <folder>] [--out <folder>] [--limit 250] [--no-analyse] [--issue]
+  bigbundle-wright issue <project.json>      lock page numbers so later documents go in as 88-1, 88-2…
   bigbundle-wright deadline <hearing date YYYY-MM-DD>
 `;
 
@@ -28,6 +32,7 @@ async function main(argv: string[]) {
       title: { type: 'string' },
       limit: { type: 'string' },
       'no-analyse': { type: 'boolean' },
+      issue: { type: 'boolean' },
       quiet: { type: 'boolean', short: 'q' },
     },
   });
@@ -45,7 +50,8 @@ async function main(argv: string[]) {
 
   if (cmd === 'build') {
     const projPath = resolve(positionals[0] ?? 'project.json');
-    const project = JSON.parse(await readFile(projPath, 'utf8')) as Project;
+    const { project, warnings: loadWarnings } = parseProject(await readFile(projPath, 'utf8'));
+    loadWarnings.forEach((w) => log(`  • ${w}`));
     if (values.limit) project.settings.maxPagesPerVolume = Number(values.limit);
     const filesDir = resolve(values.files ?? dirname(projPath));
     const outDir = resolve(values.out ?? join(dirname(projPath), 'out'));
@@ -60,21 +66,35 @@ async function main(argv: string[]) {
         log(`  analysed ${++i}/${sources.size}: ${src.ref.name}`);
       }
     }
-    const result = await buildBundle({ project, sources, analysis });
+    const result = await buildBundle({ project, sources, analysis, issue: values.issue });
     await mkdir(outDir, { recursive: true });
     for (const v of result.volumes) {
       await writeFile(join(outDir, v.fileName), v.bytes);
-      log(`  ✓ ${v.fileName}: ${v.pageCount} pages (${v.indexPages} index + pages ${v.firstLabel}–${v.lastLabel})`);
+      const front = `${v.frontSheetPages ? `${v.frontSheetPages} status + ` : ''}${v.prelimPages - v.frontSheetPages} index`;
+      log(`  ✓ ${v.fileName}: ${v.pageCount} pages (${front} + pages ${v.firstLabel}–${v.lastLabel})`);
     }
     if (result.masterIndex) {
       await writeFile(join(outDir, result.masterIndex.fileName), result.masterIndex.bytes);
       log(`  ✓ ${result.masterIndex.fileName}`);
     }
     await writeFile(join(outDir, 'build-report.json'), JSON.stringify({ warnings: result.warnings }, null, 2));
+    if (result.issuedProject) {
+      await writeFile(projPath, serializeProject(result.issuedProject));
+      log(`  ✓ Issued: page numbers are now locked in ${projPath}`);
+    }
     if (result.warnings.length) {
       log(`\n${result.warnings.length} warning(s):`);
       for (const w of result.warnings) log(`  ! [${w.code}] ${w.message}`);
     }
+    return 0;
+  }
+
+  if (cmd === 'issue') {
+    const projPath = resolve(positionals[0] ?? 'project.json');
+    const { project } = parseProject(await readFile(projPath, 'utf8'));
+    const plan = await planProject(project);
+    await writeFile(projPath, serializeProject(freezeProject(project, plan, new Date().toISOString())));
+    log(`Issued ${projPath}: ${plan.main.volumes.length} main volume(s); page numbers are now locked.`);
     return 0;
   }
 
@@ -91,6 +111,6 @@ async function main(argv: string[]) {
 }
 
 main(process.argv.slice(2)).then((code) => process.exit(code), (e) => {
-  console.error(e instanceof SourceError ? `✗ ${e.message}` : e);
+  console.error(e instanceof SourceError || e instanceof ProjectError ? `✗ ${e.message}` : e);
   process.exit(1);
 });

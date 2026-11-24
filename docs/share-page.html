@@ -1,0 +1,354 @@
+<title>Big Bundle Wright</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Noto+Serif:wght@400;600;700&family=Noto+Serif+TC:wght@700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* Layout: one dark navy "glass" world taken from the icon. Hero with the icon, a paper index
+   card as the proof, then features, privacy and the steps, in a single centred column. */
+:root {
+  --navy-950: #0B1128;
+  --navy-900: #121a3a;
+  --navy-800: #1E2B55;
+  --ink: #EEF2FC;          /* text on navy */
+  --muted: #A3B0D6;        /* secondary text on navy */
+  --line: rgba(201, 213, 245, 0.16);
+  --glass: rgba(201, 213, 245, 0.06);
+  --glass-hi: rgba(255, 255, 255, 0.10);
+  --accent: #C9D5F5;       /* pale glass blue */
+  --paper: #F7F9FE;
+  --paper-ink: #16204A;
+  --paper-muted: #5A6690;
+  --paper-rule: #DCE3F4;
+
+  --f-display: "Plus Jakarta Sans", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "Plus Jakarta Sans", "Helvetica Neue", Arial, sans-serif;
+  --f-doc: "Noto Serif", Georgia, "Times New Roman", serif;
+  --f-zh: "Noto Serif TC", "PingFang TC", "Songti TC", serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--navy-950);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 1rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+/* ---------- hero ---------- */
+.hero {
+  position: relative;
+  overflow: hidden;
+  margin-top: calc(-1 * env(safe-area-inset-top, 0px));
+  padding-top: calc(env(safe-area-inset-top, 0px) + 4.5rem);
+  padding-bottom: 4rem;
+  background:
+    radial-gradient(60% 55% at 18% 10%, rgba(74, 106, 184, 0.45), transparent 70%),
+    radial-gradient(45% 45% at 88% 18%, rgba(127, 155, 224, 0.30), transparent 70%),
+    linear-gradient(180deg, #26335C 0%, var(--navy-950) 100%);
+}
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 3.5rem;
+  align-items: center;
+}
+.brand { display: flex; align-items: center; gap: 1rem; }
+.brand img { width: 76px; height: 76px; border-radius: 18px; box-shadow: 0 14px 34px rgba(0,0,0,.45); }
+.brand-name { font-family: var(--f-display); font-weight: 600; font-size: 1.05rem; letter-spacing: 0.01em; }
+.brand-sub { font-size: 0.78rem; color: var(--muted); letter-spacing: 0.14em; text-transform: uppercase; }
+.pill {
+  display: inline-flex; align-items: center; gap: .5rem;
+  margin-top: 2.25rem;
+  padding: .35rem .8rem;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  border-radius: 999px;
+  font-size: .78rem; color: var(--muted); letter-spacing: .04em;
+}
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px rgba(201,213,245,.15); }
+h1 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: clamp(2.4rem, 5.4vw, 4rem);
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  margin: 1rem 0 0;
+  text-wrap: balance;
+}
+h1 .zh { font-family: var(--f-zh); font-weight: 700; letter-spacing: 0; color: #fff; }
+.lede { margin: 1.4rem 0 0; font-size: 1.15rem; color: var(--muted); max-width: 34rem; }
+.lede strong { color: var(--ink); font-weight: 600; }
+
+/* paper index card */
+.paper {
+  position: relative;
+  background: var(--paper);
+  color: var(--paper-ink);
+  border-radius: 14px;
+  padding: 2.2rem 1.6rem 1.4rem;
+  font-family: var(--f-doc);
+  box-shadow: 0 30px 70px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.6) inset;
+  transform: rotate(1.2deg);
+}
+.paper::before, .paper::after {
+  content: ""; position: absolute; inset: 0; border-radius: 14px; z-index: -1;
+  background: rgba(201, 213, 245, 0.35);
+  border: 1px solid rgba(255,255,255,.5);
+}
+.paper::before { transform: rotate(-3.5deg) translate(-10px, 10px); }
+.paper::after  { transform: rotate(-1.6deg) translate(6px, 14px); background: rgba(201,213,245,.55); }
+.stamp {
+  position: absolute; top: .9rem; right: 1rem;
+  font-family: var(--f-mono); font-weight: 600; font-size: .85rem;
+  background: #fff; border: 1px solid var(--paper-rule); border-radius: 4px;
+  padding: .1rem .5rem; color: var(--paper-ink);
+}
+.example { font-family: var(--f-body); font-size: .68rem; letter-spacing: .14em; text-transform: uppercase; color: var(--paper-muted); }
+.paper h2 { font-size: 1.05rem; font-weight: 700; margin: .35rem 0 0; letter-spacing: .01em; }
+.paper .case { font-size: .82rem; color: var(--paper-muted); margin-top: .15rem; }
+.idx-scroll { overflow-x: auto; margin-top: 1rem; }
+table.idx { width: 100%; border-collapse: collapse; font-size: .8rem; min-width: 400px; }
+.idx th {
+  font-family: var(--f-body); font-weight: 600; font-size: .66rem; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--paper-muted); text-align: left; padding: .45rem .4rem; border-bottom: 1.5px solid var(--paper-ink);
+}
+.idx td { padding: .42rem .4rem; border-bottom: 1px solid var(--paper-rule); vertical-align: top; }
+.idx .num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; color: #2B4BB3; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: rgba(43,75,179,.35); }
+.idx th.num { text-align: right; color: var(--paper-muted); text-decoration: none; font-family: var(--f-body); }
+.idx .tab, .idx .st { font-family: var(--f-mono); font-size: .76rem; white-space: nowrap; }
+.idx .date { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.idx tr.sec td { font-family: var(--f-body); font-weight: 600; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--paper-muted); padding-top: .8rem; border-bottom: none; }
+.idx tr.insert td { background: #EEF2FC; }
+.idx .zh { font-family: var(--f-zh); font-weight: 700; font-size: .78rem; color: var(--paper-muted); margin-left: .35rem; }
+.legend { font-family: var(--f-body); font-size: .7rem; color: var(--paper-muted); margin-top: .8rem; line-height: 1.5; }
+
+/* ---------- sections ---------- */
+section.band { padding-block: 4.5rem; border-top: 1px solid var(--line); }
+.eyebrow { font-size: .76rem; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+h3.title {
+  font-family: var(--f-display); font-weight: 700; font-size: clamp(1.6rem, 3vw, 2.2rem);
+  letter-spacing: -0.02em; line-height: 1.15; margin: .5rem 0 0; text-wrap: balance; max-width: 40rem;
+}
+.intro { color: var(--muted); max-width: 40rem; margin: .9rem 0 0; }
+
+.features {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-top: 2.5rem;
+}
+.feat {
+  background: linear-gradient(180deg, var(--glass-hi), var(--glass));
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 1.3rem 1.2rem 1.2rem;
+  display: flex; flex-direction: column; gap: .55rem;
+  min-width: 0;
+}
+.feat .ref { font-family: var(--f-mono); font-size: .72rem; color: var(--accent); opacity: .85; }
+.feat h4 { margin: 0; font-size: 1.02rem; font-weight: 600; letter-spacing: -0.005em; }
+.feat p { margin: 0; font-size: .9rem; color: var(--muted); line-height: 1.55; }
+
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 3rem; align-items: start; }
+.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: .9rem; }
+.checks li {
+  display: grid; grid-template-columns: 1.6rem minmax(0, 1fr); gap: .75rem;
+  padding: 1rem 1.1rem; border: 1px solid var(--line); border-radius: 14px; background: var(--glass);
+}
+.checks svg { width: 1.6rem; height: 1.6rem; }
+.checks b { display: block; font-weight: 600; }
+.checks span { color: var(--muted); font-size: .92rem; }
+
+.steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin-top: 2.5rem; counter-reset: s; }
+.step { padding: 1.4rem 1.3rem; border-radius: 18px; border: 1px solid var(--line); background: var(--glass); min-width: 0; }
+.step::before {
+  counter-increment: s; content: counter(s);
+  display: inline-grid; place-items: center; width: 2rem; height: 2rem; border-radius: 50%;
+  font-family: var(--f-mono); font-weight: 600; font-size: .9rem;
+  background: var(--accent); color: var(--navy-950);
+}
+.step h4 { margin: .9rem 0 .3rem; font-size: 1.05rem; font-weight: 600; }
+.step p { margin: 0; color: var(--muted); font-size: .92rem; }
+.outputs { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .8rem; }
+.outputs span { font-family: var(--f-mono); font-size: .72rem; padding: .15rem .5rem; border-radius: 6px; border: 1px solid var(--line); color: var(--ink); }
+
+footer { border-top: 1px solid var(--line); padding-block: 2.5rem 3rem; color: var(--muted); font-size: .85rem; }
+.foot { display: flex; flex-wrap: wrap; gap: 1rem 2rem; justify-content: space-between; align-items: center; }
+.foot .brand img { width: 40px; height: 40px; border-radius: 10px; box-shadow: none; }
+.foot p { margin: 0; max-width: 36rem; }
+
+@media (max-width: 900px) {
+  .hero-grid, .split { grid-template-columns: minmax(0, 1fr); gap: 3rem; }
+  .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .steps { grid-template-columns: minmax(0, 1fr); }
+  .paper { transform: none; }
+}
+@media (max-width: 520px) {
+  .features { grid-template-columns: minmax(0, 1fr); }
+  .hero { padding-top: calc(env(safe-area-inset-top, 0px) + 3rem); }
+  .paper { padding: 2.2rem 1rem 1.2rem; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .paper { transition: transform .5s ease; }
+  .paper:hover { transform: rotate(0deg) translateY(-4px); }
+}
+</style>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="brand">
+        <img src="logo.svg" alt="Big Bundle Wright icon: a navy glass folder of documents marked BBW">
+        <div>
+          <div class="brand-name">Big Bundle Wright</div>
+          <div class="brand-sub">Hong Kong · PD 5.6</div>
+        </div>
+      </div>
+      <div class="pill"><i></i>In development</div>
+      <h1>Court bundles fit for a <span class="zh">大狀</span>.</h1>
+      <p class="lede">Drop in your documents and get back a hearing bundle that follows <strong>Practice Direction 5.6</strong>: indexed, paginated top right, hyperlinked and split into volumes. It all runs in your browser, so nothing is uploaded.</p>
+    </div>
+
+    <figure class="paper" style="margin:0" aria-label="Example bundle index">
+      <span class="stamp">i</span>
+      <div class="example">Example index</div>
+      <h2>Bundle A · Index</h2>
+      <div class="case">HCA 1234/2025 · Chan Tai Man v Wong Siu Ming</div>
+      <div class="idx-scroll">
+        <table class="idx">
+          <thead><tr><th>Tab</th><th>Date</th><th>Document</th><th>Status</th><th class="num">Page</th></tr></thead>
+          <tbody>
+            <tr class="sec"><td colspan="5">A · Pleadings<span class="zh">狀書</span></td></tr>
+            <tr><td class="tab">1</td><td class="date">03/01/2025</td><td>Writ of Summons</td><td class="st">(1)</td><td class="num">1</td></tr>
+            <tr><td class="tab">2</td><td class="date">14/02/2025</td><td>Statement of Claim</td><td class="st">(1)</td><td class="num">4</td></tr>
+            <tr><td class="tab">3</td><td class="date">21/03/2025</td><td>Defence</td><td class="st">(1)</td><td class="num">19</td></tr>
+            <tr class="sec"><td colspan="5">B · Correspondence<span class="zh">往來書信</span></td></tr>
+            <tr><td class="tab">4</td><td class="date">02/05/2025</td><td>Letter, Lee &amp; Co to Ho Solicitors</td><td class="st">(2)</td><td class="num">88</td></tr>
+            <tr class="insert"><td class="tab">4A</td><td class="date">09/05/2025</td><td>Reply, Ho Solicitors to Lee &amp; Co</td><td class="st">(2)</td><td class="num">88-1</td></tr>
+            <tr><td class="tab">5</td><td class="date">undated</td><td>Site photographs</td><td class="st">(3)</td><td class="num">89</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="legend">Status: (1) authenticity agreed · (2) included, authenticity not agreed · (3) evidence of contents only. Page 88-1 was inserted after the bundle was issued, so nothing after it moved.</p>
+    </figure>
+  </div>
+</header>
+
+<main>
+  <section class="band">
+    <div class="wrap">
+      <div class="eyebrow">What it does</div>
+      <h3 class="title">The tedious parts of a bundle, done the way the Practice Direction asks.</h3>
+      <div class="features">
+        <article class="feat">
+          <div class="ref">Index</div>
+          <h4>Linked index and bookmarks</h4>
+          <p>Every index row jumps to its page. Bookmarks nest under each section, with page numbers in the titles.</p>
+        </article>
+        <article class="feat">
+          <div class="ref">PD 5.6 para 4(3)</div>
+          <h4>Numbers top right</h4>
+          <p>Consecutive page numbers in the top right-hand corner, on a white box that shrinks the page rather than cover its text.</p>
+        </article>
+        <article class="feat">
+          <div class="ref">Volumes</div>
+          <h4>Bundle A, B, C</h4>
+          <p>Splits at 250 pages per volume without breaking a document across two files, plus a master index for the set.</p>
+        </article>
+        <article class="feat">
+          <div class="ref">PD 5.6 para 1</div>
+          <h4>Late documents as 88-1</h4>
+          <p>Once a bundle is issued its numbers are frozen. New documents slot in as 88-1, 88-2 and nothing else renumbers.</p>
+        </article>
+        <article class="feat">
+          <div class="ref">PD 5.6 paras 2 and 5</div>
+          <h4>Core and transcript bundles</h4>
+          <p>Prompts for a core bundle once documents pass 100 pages. Transcripts get their own bundle numbered T1, T2.</p>
+        </article>
+        <article class="feat">
+          <div class="ref">中英</div>
+          <h4>Bilingual headings</h4>
+          <p>Section titles and descriptions in English and Traditional Chinese, with Noto Serif TC built in so the index prints correctly.</p>
+        </article>
+        <article class="feat">
+          <div class="ref">PD 5.6 para 8</div>
+          <h4>Lodging deadline</h4>
+          <p>Counts back 72 hours from the hearing, skipping Saturdays, Sundays and Hong Kong general holidays.</p>
+        </article>
+        <article class="feat">
+          <div class="ref">Checks</div>
+          <h4>Pages that need a look</h4>
+          <p>Flags scans with no searchable text, encrypted files, landscape pages and anything sitting where the stamp goes.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap split">
+      <div>
+        <div class="eyebrow">Private by design</div>
+        <h3 class="title">Your documents never leave your computer.</h3>
+        <p class="intro">Bundles are full of privileged and personal material. Big Bundle Wright reads and writes PDFs inside the browser tab, makes no network calls while it works, and keeps no copy anywhere else.</p>
+      </div>
+      <ul class="checks">
+        <li>
+          <svg viewBox="0 0 24 24" fill="none" stroke="#C9D5F5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v6c0 4.2-3 7.6-7 9-4-1.4-7-4.8-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+          <div><b>No uploads, no tracking</b><span>Fonts and libraries ship with the app. Nothing loads from a CDN and nothing reports back.</span></div>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" fill="none" stroke="#C9D5F5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 13h6M9 17h4"/></svg>
+          <div><b>A project file, not a copy</b><span>Saving keeps descriptions, dates and file fingerprints. Re-add the same PDFs and it checks they have not changed.</span></div>
+        </li>
+        <li>
+          <svg viewBox="0 0 24 24" fill="none" stroke="#C9D5F5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16.5v.01"/></svg>
+          <div><b>No hidden data in the bundle</b><span>The finished PDF carries no concealed metadata. Embedding the project for later editing is off unless you switch it on.</span></div>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="eyebrow">How it works</div>
+      <h3 class="title">Three steps from a folder of PDFs to a bundle ready to lodge.</h3>
+      <div class="steps">
+        <div class="step">
+          <h4>Add the documents</h4>
+          <p>Drag in PDFs and photos. Dates and titles are read from file names, and images are fitted to A4.</p>
+        </div>
+        <div class="step">
+          <h4>Check the index</h4>
+          <p>Sort by date, group into sections, mark each document's status and flag the core documents.</p>
+        </div>
+        <div class="step">
+          <h4>Build the bundle</h4>
+          <p>Get every volume and the extras in one download, with a report of anything that needs attention.</p>
+          <div class="outputs"><span>Bundle A.pdf</span><span>Bundle B.pdf</span><span>Master index.pdf</span><span>Index.docx</span><span>Report</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div class="brand">
+      <img src="logo.svg" alt="">
+      <div>
+        <div class="brand-name">Big Bundle Wright</div>
+        <div class="brand-sub">Open source · MPL 2.0</div>
+      </div>
+    </div>
+    <p>An independent project, not affiliated with the Hong Kong Judiciary. It builds on ideas from BunTool, the open-source bundler for English courts.</p>
+  </div>
+</footer>

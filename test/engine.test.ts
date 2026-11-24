@@ -3,113 +3,35 @@
 
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRef, PDFString, PDFHexString } from 'pdf-lib';
-import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber } from 'pdf-lib';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { PDFJS_ASSETS, analyse, initProject, loadProjectSources } from '../cli/node-support.ts';
 import {
   buildBundle, describeDeadline, loadSource, lodgingDeadline, parseFileName, safeFileName, SourceError,
-  type BuildOutput, type LoadedSource, type PageAnalysis, type Project,
+  type BuildOutput, type BuiltVolume, type Project,
 } from '../src/engine/index.ts';
-import { BAD_DIR, FIXTURE_DIR, MAIN_SET, generate } from './fixtures/generate.ts';
+import { BAD_DIR, FIXTURE_DIR, MAIN_SET } from './fixtures/generate.ts';
+import { FIXED, linksOn, outline, readText, setupBase, stampOf, type Base, type PageText } from './helpers.ts';
 
-// ---------- helpers ----------
-
-interface TextItem { str: string; x: number; y: number; a: number; b: number }
-interface PageText { w: number; h: number; items: TextItem[]; text: string }
-
-async function readText(bytes: Uint8Array): Promise<PageText[]> {
-  const task = pdfjs.getDocument({ data: bytes.slice(), ...PDFJS_ASSETS });
-  const doc = await task.promise;
-  const out: PageText[] = [];
-  for (let i = 1; i <= doc.numPages; i++) {
-    const p = await doc.getPage(i);
-    const vp = p.getViewport({ scale: 1 });
-    const tc = await p.getTextContent();
-    const items = tc.items.filter((it): it is any => 'str' in it && it.str.trim() !== '')
-      .map((it: any) => ({ str: it.str.trim(), x: it.transform[4], y: it.transform[5], a: it.transform[0], b: it.transform[1] }));
-    out.push({ w: vp.width, h: vp.height, items, text: items.map((t) => t.str).join(' ') });
-  }
-  await task.destroy();
-  return out;
-}
-
-/** The stamp: the text item in the top-right zone of the page. */
-function stampOf(p: PageText): string | undefined {
-  return p.items.find((t) => t.x > p.w - 150 && t.y > p.h - 45)?.str;
-}
-
-function pageIndexByRef(doc: PDFDocument) {
-  const m = new Map<string, number>();
-  doc.getPages().forEach((p, i) => m.set(p.ref.toString(), i));
-  return m;
-}
-
-function linksOn(doc: PDFDocument, pageIdx: number) {
-  const page = doc.getPage(pageIdx);
-  const annots = page.node.Annots();
-  const refs = pageIndexByRef(doc);
-  const out: { target?: number; remote?: { file: string; page: number } }[] = [];
-  if (!annots) return out;
-  for (let i = 0; i < annots.size(); i++) {
-    const a = doc.context.lookup(annots.get(i), PDFDict);
-    if (a.get(PDFName.of('Subtype'))?.toString() !== '/Link') continue;
-    const dest = a.lookupMaybe(PDFName.of('Dest'), PDFArray);
-    if (dest) { out.push({ target: refs.get((dest.get(0) as PDFRef).toString()) }); continue; }
-    const act = a.lookup(PDFName.of('A'), PDFDict);
-    const f = act.lookup(PDFName.of('F')) as PDFString | PDFHexString;
-    const d = act.lookup(PDFName.of('D'), PDFArray);
-    out.push({ remote: { file: f.decodeText(), page: (d.get(0) as PDFNumber).asNumber() } });
-  }
-  return out;
-}
-
-function outline(doc: PDFDocument) {
-  const refs = pageIndexByRef(doc);
-  const out: { title: string; page: number; depth: number }[] = [];
-  const root = doc.catalog.lookupMaybe(PDFName.of('Outlines'), PDFDict);
-  const walk = (first: PDFDict | undefined, depth: number) => {
-    let node = first;
-    while (node) {
-      const t = node.lookup(PDFName.of('Title')) as PDFString | PDFHexString;
-      const dest = node.lookup(PDFName.of('Dest'), PDFArray);
-      out.push({ title: t.decodeText(), page: refs.get((dest.get(0) as PDFRef).toString())!, depth });
-      walk(node.lookupMaybe(PDFName.of('First'), PDFDict), depth + 1);
-      node = node.lookupMaybe(PDFName.of('Next'), PDFDict);
-    }
-  };
-  walk(root?.lookupMaybe(PDFName.of('First'), PDFDict), 0);
-  return out;
-}
-
-// ---------- shared build ----------
-
+let base: Base;
 let project: Project;
-let sources: Map<string, LoadedSource>;
-let analysis: Map<string, PageAnalysis[]>;
 let result: BuildOutput;
+let main: BuiltVolume[];
 let texts: PageText[][];
-const keyOfFile = new Map<string, string>();
-const FIXED = new Date('2026-11-24T00:00:00Z');
 
 function variant(mut: (p: Project) => void): Project {
   const p = structuredClone(project);
   mut(p);
   return p;
 }
+const build = (p: Project) => buildBundle({ project: p, sources: base.sources, analysis: base.analysis, date: FIXED });
 
 beforeAll(async () => {
-  await generate();
-  ({ project } = await initProject(FIXTURE_DIR, { actionNo: 'HCA 1234/2025', shortTitle: 'Chan v Wong' }));
-  ({ sources } = await loadProjectSources(project, FIXTURE_DIR));
-  analysis = new Map();
-  for (const [id, s] of sources) analysis.set(id, await analyse(s));
-  for (const f of project.files) keyOfFile.set(f.id, MAIN_SET.find((m) => m.name === f.name)!.key);
-  result = await buildBundle({ project, sources, analysis, date: FIXED });
-  texts = await Promise.all(result.volumes.map((v) => readText(v.bytes)));
-}, 120_000);
-
-// ---------- tests ----------
+  base = await setupBase();
+  project = base.project;
+  result = await build(project);
+  main = result.volumes.filter((v) => v.kind === 'main');
+  texts = await Promise.all(main.map((v) => readText(v.bytes)));
+}, 180_000);
 
 describe('inputs', () => {
   it('draft project reads dates and titles from file names and sorts by date', () => {
@@ -132,7 +54,7 @@ describe('inputs', () => {
   });
 
   it('converts a JPG to a one-page A4 PDF', () => {
-    const photo = [...sources.values()].find((s) => s.ref.name.endsWith('.jpg'))!;
+    const photo = [...base.sources.values()].find((s) => s.ref.name.endsWith('.jpg'))!;
     expect(photo.ref.kind).toBe('image');
     const { width, height } = photo.pdf.getPage(0).getSize();
     expect([Math.round(width), Math.round(height)]).toEqual([842, 595]);
@@ -145,8 +67,8 @@ describe('inputs', () => {
 
 describe('volumes and pagination (PD 5.6 paras 4(3), 5)', () => {
   it('splits 300+ pages into volumes that never exceed 250 pages', async () => {
-    expect(result.volumes.length).toBe(2);
-    for (const v of result.volumes) {
+    expect(main.length).toBe(2);
+    for (const v of main) {
       expect(v.pageCount).toBeLessThanOrEqual(250);
       expect((await PDFDocument.load(v.bytes)).getPageCount()).toBe(v.pageCount);
     }
@@ -154,28 +76,28 @@ describe('volumes and pagination (PD 5.6 paras 4(3), 5)', () => {
 
   it('does not split a document across volumes when it fits in one', () => {
     const where = new Map<string, Set<string>>();
-    for (const v of result.plan.volumes) for (const p of v.pages) where.set(p.docId!, (where.get(p.docId!) ?? new Set()).add(v.letter));
+    for (const v of result.plan.main.volumes) for (const p of v.pages) where.set(p.docId!, (where.get(p.docId!) ?? new Set()).add(v.letter));
     for (const s of where.values()) expect(s.size).toBe(1);
   });
 
-  it('stamps every content page top-right with consecutive numbers across volumes', () => {
+  it('stamps every content page top-right with consecutive numbers across volumes; front pages unnumbered', () => {
     const all: string[] = [];
-    result.volumes.forEach((v, vi) => {
+    main.forEach((v, vi) => {
       const t = texts[vi];
-      for (let k = v.indexPages; k < t.length; k++) all.push(stampOf(t[k]) ?? `MISSING@${v.letter}${k}`);
-      for (let k = 0; k < v.indexPages; k++) expect(stampOf(t[k])).toBeUndefined();
+      for (let k = v.prelimPages; k < t.length; k++) all.push(stampOf(t[k]) ?? `MISSING@${v.letter}${k}`);
+      for (let k = 0; k < v.prelimPages; k++) expect(stampOf(t[k])).toBeUndefined();
     });
     expect(all).toEqual(all.map((_, i) => String(i + 1)));
-    expect(result.plan.volumes.flatMap((v) => v.pages.map((p) => p.label))).toEqual(all);
+    expect(result.plan.main.volumes.flatMap((v) => v.pages.map((p) => p.label))).toEqual(all);
   });
 
   it('puts the right source page behind every number', () => {
     let checked = 0;
-    result.plan.volumes.forEach((v, vi) => {
+    result.plan.main.volumes.forEach((v, vi) => {
       v.pages.forEach((p, k) => {
-        const key = keyOfFile.get(p.fileId!);
+        const key = base.keyOfFile.get(p.fileId!);
         if (key === 'SCAN' || key === 'PHOTO') return; // images: no text layer
-        expect(texts[vi][result.volumes[vi].indexPages + k].text).toContain(`[${key} p${p.srcIndex! + 1}]`);
+        expect(texts[vi][main[vi].prelimPages + k].text).toContain(`[${key} p${p.srcIndex! + 1}]`);
         checked++;
       });
     });
@@ -183,19 +105,16 @@ describe('volumes and pagination (PD 5.6 paras 4(3), 5)', () => {
   });
 
   it('normalises every page to A4 and keeps landscape pages upright', () => {
-    for (const t of texts) for (const p of t) {
-      const dims = [Math.round(p.w), Math.round(p.h)].sort();
-      expect(dims).toEqual([595, 842]);
-    }
+    for (const t of texts) for (const p of t) expect([Math.round(p.w), Math.round(p.h)].sort()).toEqual([595, 842]);
     const all = texts.flat();
-    for (const marker of ['[SCHED p1]', '[SCHED p2]', '[SCHED p3]', '[SCHED p4]']) {
-      const page = all.find((p) => p.text.includes(marker))!;
-      const item = page.items.find((i) => marker.includes(i.str) || i.str.includes(marker.slice(1, -1)) || page.text.includes(marker))!;
+    for (const marker of ['SCHED p1', 'SCHED p2', 'SCHED p3', 'SCHED p4']) {
+      const page = all.find((p) => p.text.includes(`[${marker}]`))!;
+      const item = page.items.find((i) => i.str.includes(marker))!;
       expect(item.a).toBeGreaterThan(0);
       expect(Math.abs(item.b)).toBeLessThan(1e-6);
     }
     const p3 = all.find((p) => p.text.includes('[SCHED p3]'))!;
-    expect(p3.w).toBeGreaterThan(p3.h); // shown as landscape
+    expect(p3.w).toBeGreaterThan(p3.h);
   });
 
   it('keeps the stamp clear: content in the corner is shrunk out of the way, and reported', () => {
@@ -213,32 +132,38 @@ describe('volumes and pagination (PD 5.6 paras 4(3), 5)', () => {
     expect(result.warnings.find((w) => w.code === 'edge-content')?.pages).toEqual(['163']);
   });
 
-  it('keeps transcripts out of the main bundle', () => {
-    const tx = project.docs.find((d) => d.type === 'transcript')!;
-    expect(result.plan.volumes.some((v) => v.pages.some((p) => p.docId === tx.id))).toBe(false);
-    expect(result.plan.deferredDocIds).toEqual([tx.id]);
-  });
-
   it('sets PDF page labels to the stamped numbers', async () => {
-    const doc = await PDFDocument.load(result.volumes[1].bytes);
+    const doc = await PDFDocument.load(main[1].bytes);
     const nums = doc.catalog.lookup(PDFName.of('PageLabels'), PDFDict).lookup(PDFName.of('Nums'), PDFArray);
-    const st = (nums.lookup(3, PDFDict).get(PDFName.of('St')) as PDFNumber).asNumber();
-    expect(st).toBe(Number(result.volumes[1].firstLabel));
+    // [0 Status, 1 Index, 2 first content]
+    const st = (nums.lookup(5, PDFDict).get(PDFName.of('St')) as PDFNumber).asNumber();
+    expect(st).toBe(Number(main[1].firstLabel));
   });
 });
 
-describe('index, hyperlinks and bookmarks', () => {
+describe('index, front sheet, hyperlinks and bookmarks', () => {
+  it('front sheet comes first and states each status category (PD 5.6 para 3)', () => {
+    for (const [vi, v] of main.entries()) {
+      expect(v.frontSheetPages).toBe(1);
+      const t = texts[vi][0].text;
+      expect(t).toContain('STATUS OF DOCUMENTS');
+      expect(t).toContain('(1) Deemed authentic');
+      expect(t).toContain('(2) Agreed for inclusion only');
+      expect(t).toContain('(3) Also agreed as evidence of contents');
+    }
+    expect(texts[0][0].text).toMatch(/Nos\. 1–8 1–248/); // adjacent ranges merged
+  });
+
   it('index rows show page ranges that match the stamps, and each link lands on the first page', async () => {
-    for (const [vi, v] of result.volumes.entries()) {
+    for (const [vi, v] of main.entries()) {
       const doc = await PDFDocument.load(v.bytes);
-      const entries = result.plan.volumes[vi].rows.filter((r) => r.kind === 'doc');
-      const links = Array.from({ length: v.indexPages }, (_, k) => linksOn(doc, k)).flat();
+      const entries = result.plan.main.volumes[vi].rows.filter((r) => r.kind === 'doc');
+      const links = Array.from({ length: v.prelimPages }, (_, k) => linksOn(doc, k)).flat();
       expect(links.length).toBe(entries.length);
-      const indexText = texts[vi].slice(0, v.indexPages).map((p) => p.text).join(' ');
+      const indexText = texts[vi].slice(v.frontSheetPages, v.prelimPages).map((p) => p.text).join(' ');
       entries.forEach((e, n) => {
         if (e.kind !== 'doc') return;
-        const range = e.firstLabel === e.lastLabel ? e.firstLabel : `${e.firstLabel}–${e.lastLabel}`;
-        expect(indexText).toContain(range);
+        expect(indexText).toContain(e.firstLabel === e.lastLabel ? e.firstLabel : `${e.firstLabel}–${e.lastLabel}`);
         expect(stampOf(texts[vi][links[n].target!])).toBe(e.firstLabel);
         expect(stampOf(texts[vi][links[n].target! + e.count - 1])).toBe(e.lastLabel);
       });
@@ -246,103 +171,99 @@ describe('index, hyperlinks and bookmarks', () => {
   });
 
   it('bookmarks show the page number and land on that page', async () => {
-    for (const [vi, v] of result.volumes.entries()) {
-      const doc = await PDFDocument.load(v.bytes);
-      const items = outline(doc);
+    for (const [vi, v] of main.entries()) {
+      const items = outline(await PDFDocument.load(v.bytes));
       expect(items[0].title).toBe(`Bundle ${v.letter} (pp. ${v.firstLabel}–${v.lastLabel})`);
-      expect(items[1]).toMatchObject({ title: 'Index', page: 0, depth: 1 });
+      expect(items[1]).toMatchObject({ title: 'Status of documents', page: 0, depth: 1 });
+      expect(items[2]).toMatchObject({ title: 'Index', page: 1, depth: 1 });
       const docs = items.filter((i) => /— p\. /.test(i.title));
-      expect(docs.length).toBe(result.plan.volumes[vi].rows.filter((r) => r.kind === 'doc').length);
-      for (const b of docs) {
-        const label = b.title.split('— p. ')[1];
-        expect(stampOf(texts[vi][b.page])).toBe(label);
-      }
+      expect(docs.length).toBe(result.plan.main.volumes[vi].rows.filter((r) => r.kind === 'doc').length);
+      for (const b of docs) expect(stampOf(texts[vi][b.page])).toBe(b.title.split('— p. ')[1]);
     }
   });
 
   it('master index links point into the right volume file and page', async () => {
     const doc = await PDFDocument.load(result.masterIndex!.bytes);
     const links = Array.from({ length: doc.getPageCount() }, (_, k) => linksOn(doc, k)).flat();
-    const entries = result.plan.volumes.flatMap((v) => v.rows.filter((r) => r.kind === 'doc').map((r) => ({ r, v })));
+    const entries = result.plan.main.volumes.flatMap((v) => v.rows.filter((r) => r.kind === 'doc'));
     expect(links.length).toBe(entries.length);
     links.forEach((l, n) => {
-      const vi = result.volumes.findIndex((v) => v.fileName === l.remote!.file);
+      const vi = main.findIndex((v) => v.fileName === l.remote!.file);
       expect(vi).toBeGreaterThanOrEqual(0);
-      const e = entries[n].r;
+      const e = entries[n];
       if (e.kind === 'doc') expect(stampOf(texts[vi][l.remote!.page])).toBe(e.firstLabel);
     });
   });
 
   it('names output files "<Action No> <Short title> Bundle A.pdf" with the slash made file-safe', () => {
-    expect(result.volumes.map((v) => v.fileName)).toEqual(['HCA 1234-2025 Chan v Wong Bundle A.pdf', 'HCA 1234-2025 Chan v Wong Bundle B.pdf']);
+    expect(main.map((v) => v.fileName)).toEqual(['HCA 1234-2025 Chan v Wong Bundle A.pdf', 'HCA 1234-2025 Chan v Wong Bundle B.pdf']);
     expect(safeFileName('HCA 1234/2025: A*B?')).toBe('HCA 1234-2025 AB');
   });
 
   it('rebuilds byte-for-byte identically from the same inputs', async () => {
-    const again = await buildBundle({ project, sources, analysis, date: FIXED });
+    const again = await build(project);
     expect(Buffer.from(again.volumes[0].bytes).equals(Buffer.from(result.volumes[0].bytes))).toBe(true);
   });
 });
 
 describe('options', () => {
   it('splits a document only when it alone exceeds the limit', async () => {
-    const p = variant((x) => { x.settings.maxPagesPerVolume = 60; });
-    const r = await buildBundle({ project: p, sources, date: FIXED });
+    const r = await build(variant((x) => { x.settings.maxPagesPerVolume = 60; }));
     for (const v of r.volumes) expect(v.pageCount).toBeLessThanOrEqual(60);
-    const split = r.warnings.filter((w) => w.code === 'doc-split').map((w) => w.message);
-    expect(split.join(' ')).toMatch(/Bank statements/);
-    expect(split.join(' ')).toMatch(/Board minutes/);
-    expect(split.join(' ')).toMatch(/Expert report/);
-    expect(split.join(' ')).not.toMatch(/Writ|Statement of Claim/);
-    const labels = r.plan.volumes.flatMap((v) => v.pages.map((x) => x.label));
+    const split = r.warnings.filter((w) => w.code === 'doc-split').map((w) => w.message).join(' ');
+    expect(split).toMatch(/Bank statements/);
+    expect(split).toMatch(/Board minutes/);
+    expect(split).toMatch(/Expert report/);
+    expect(split).not.toMatch(/Writ|Statement of Claim/);
+    const labels = r.plan.main.volumes.flatMap((v) => v.pages.map((x) => x.label));
     expect(labels).toEqual(labels.map((_, i) => String(i + 1)));
   });
 
   it('restarts numbering per volume with a prefix (A1…, B1…)', async () => {
-    const p = variant((x) => { x.settings.numbering = 'per-volume'; });
-    const r = await buildBundle({ project: p, sources, date: FIXED });
-    expect(r.volumes.map((v) => [v.firstLabel, v.lastLabel])).toEqual([['A1', 'A248'], ['B1', 'B73']]);
-    const t = await readText(r.volumes[1].bytes);
-    expect(stampOf(t[r.volumes[1].indexPages])).toBe('B1');
+    const r = await build(variant((x) => { x.settings.numbering = 'per-volume'; }));
+    const m = r.volumes.filter((v) => v.kind === 'main');
+    expect(m.map((v) => [v.firstLabel, v.lastLabel])).toEqual([['A1', 'A248'], ['B1', 'B73']]);
+    const t = await readText(m[1].bytes);
+    expect(stampOf(t[m[1].prelimPages])).toBe('B1');
   });
 
   it('numbers per section with sections on (Bates style)', async () => {
-    const p = variant((x) => {
+    const r = await build(variant((x) => {
       x.settings.sectionsEnabled = true;
       x.settings.numbering = 'per-section';
       x.sections = [{ id: 's1', letter: 'A', title: 'Pleadings' }, { id: 's2', letter: 'B', title: 'Documents' }];
       x.docs.forEach((d) => { d.sectionId = /Writ|Claim/.test(d.description) ? 's1' : 's2'; });
-    });
-    const r = await buildBundle({ project: p, sources, date: FIXED });
-    const labels = r.plan.volumes.flatMap((v) => v.pages.map((x) => x.label));
+    }));
+    const labels = r.plan.main.volumes.flatMap((v) => v.pages.map((x) => x.label));
     expect(labels.slice(0, 29)).toEqual([...Array.from({ length: 28 }, (_, i) => `A${i + 1}`), 'B1']);
     const t = await readText(r.volumes[0].bytes);
-    expect(t[0].text).toContain('Section A Pleadings');
-    expect(t[r.volumes[1].indexPages > 0 ? 0 : 0].text).toBeTruthy();
+    expect(t.slice(0, r.volumes[0].prelimPages).map((p) => p.text).join(' ')).toContain('Section A Pleadings');
     const t2 = await readText(r.volumes[1].bytes);
-    expect(t2[0].text).toContain('Section B Documents (continued)');
+    expect(t2.slice(0, r.volumes[1].prelimPages).map((p) => p.text).join(' ')).toContain('Section B Documents (continued)');
   });
 
   it('warns when the order is not chronological', async () => {
-    const p = variant((x) => { [x.docs[0], x.docs[1]] = [x.docs[1], x.docs[0]]; });
-    const r = await buildBundle({ project: p, sources, date: FIXED });
+    const r = await build(variant((x) => { [x.docs[0], x.docs[1]] = [x.docs[1], x.docs[0]]; }));
     expect(r.warnings.some((w) => w.code === 'not-chronological' && w.message.includes('Writ of Summons'))).toBe(true);
   });
 
   it('flags non-compliant numbering settings', async () => {
-    const p = variant((x) => { x.settings.stamp.position = 'bottom-centre'; x.settings.maxPagesPerVolume = 300; });
-    const r = await buildBundle({ project: p, sources, date: FIXED });
+    const r = await build(variant((x) => { x.settings.stamp.position = 'bottom-centre'; x.settings.maxPagesPerVolume = 300; }));
     const msgs = r.warnings.filter((w) => w.code === 'non-compliant-setting').map((w) => w.message).join(' ');
     expect(msgs).toMatch(/top right-hand corner/);
     expect(msgs).toMatch(/250 pages/);
   });
 
-  it('adds a blank page after odd-length documents in printable mode, keeping numbers consistent', async () => {
-    const p = variant((x) => { x.settings.printable = true; });
-    const r = await buildBundle({ project: p, sources, date: FIXED });
-    const v = r.plan.volumes[0];
+  it('adds a blank page after odd-length documents in printable mode', async () => {
+    const r = await build(variant((x) => { x.settings.printable = true; }));
+    const v = r.plan.main.volumes[0];
     const letter = v.rows.find((e) => e.kind === 'doc' && e.count === 3)!;
-    expect(v.pages[(letter as any).first + 3].kind).toBe('blank');
+    expect(v.pages[(letter as { first: number }).first + 3].kind).toBe('blank');
+  });
+
+  it('can turn the front sheet off', async () => {
+    const r = await build(variant((x) => { x.settings.frontSheet = false; }));
+    expect(r.volumes[0].frontSheetPages).toBe(0);
   });
 });
 
@@ -362,8 +283,7 @@ describe('lodging deadline (PD 5.6 para 8)', () => {
     expect(describeDeadline(r)).toBe('Lodge by close of business on Monday 30/03/2026 (the 72 hours run out at 00:00 on Tuesday 31/03/2026).');
   });
 
-  it('skips a holiday that falls before the cut-off when finding the last lodging day', () => {
-    // Hearing Mon 2026-10-05. Count back: Fri 2 (1), Thu 1 Oct is National Day (skip), Wed 30 Sep (2), Tue 29 (3).
+  it('skips a holiday inside the count (National Day)', () => {
     const r = lodgingDeadline('2026-10-05');
     expect(r.cutoffDate).toBe('2026-09-29');
     expect(r.lastLodgingDay).toBe('2026-09-28');
@@ -390,8 +310,7 @@ describe('file-name parsing', () => {
 
 describe('fixtures', () => {
   it('include every case the brief asks for', async () => {
-    const names = await readdir(FIXTURE_DIR);
-    expect(names.length).toBe(MAIN_SET.length);
+    expect((await readdir(FIXTURE_DIR)).length).toBe(MAIN_SET.length);
     expect(project.files.reduce((a, f) => a + f.pageCount, 0)).toBeGreaterThan(300);
   });
 });

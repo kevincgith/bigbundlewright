@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import {
-  analysePdf, loadSource, parseFileName, SourceError, DEFAULT_SETTINGS,
+  analysePdf, loadSource, parseFileName, SourceError, DEFAULT_SETTINGS, matchSources, describeMatch,
   type BundleDoc, type LoadedSource, type PageAnalysis, type Project,
 } from '../src/engine/index.ts';
 
@@ -24,47 +24,37 @@ export async function analyse(src: LoadedSource): Promise<PageAnalysis[]> {
   return analysePdf(pdfjs as never, src.pdfBytes, PDFJS_ASSETS);
 }
 
-/** Load every file the project refers to from `dir`, matching by name then by hash. */
+/**
+ * Load every file the project refers to from `dir`. Files are recognised by content
+ * hash, so renamed files are found; a file whose content changed is an error.
+ */
 export async function loadProjectSources(project: Project, dir: string) {
-  const names = (await readdir(dir)).filter((n) => INPUT_EXT.test(n) || /\.\w+$/.test(n));
-  const sources = new Map<string, LoadedSource>();
-  const notes: string[] = [];
-  const hashCache = new Map<string, LoadedSource | SourceError>();
-  const tryLoad = async (name: string, id: string) => {
-    const cached = hashCache.get(name);
-    if (cached) return cached;
+  const names = (await readdir(dir, { withFileTypes: true }))
+    .filter((e) => e.isFile() && !e.name.startsWith('.') && !/\.json$/i.test(e.name)).map((e) => e.name);
+  const loaded: LoadedSource[] = [];
+  const unreadable = new Map<string, SourceError>();
+  for (const name of names) {
     try {
-      const r = await loadSource(id, name, new Uint8Array(await readFile(join(dir, name))));
-      hashCache.set(name, r);
-      return r;
+      loaded.push(await loadSource(name, name, new Uint8Array(await readFile(join(dir, name)))));
     } catch (e) {
-      if (e instanceof SourceError) { hashCache.set(name, e); return e; }
-      throw e;
+      if (e instanceof SourceError) unreadable.set(name, e); else throw e;
     }
-  };
-  for (const f of project.files) {
-    let hit: LoadedSource | null = null;
-    if (names.includes(f.name)) {
-      const r = await tryLoad(f.name, f.id);
-      if (r instanceof SourceError) throw r;
-      if (r.ref.sha256 === f.sha256) hit = r;
-      else notes.push(`"${f.name}" has changed since the project was saved (content hash differs); looking for the original by content.`);
-    }
-    if (!hit) {
-      for (const n of names) {
-        const r = await tryLoad(n, f.id);
-        if (!(r instanceof SourceError) && r.ref.sha256 === f.sha256) { hit = r; notes.push(`"${f.name}" found as "${n}".`); break; }
-      }
-    }
-    if (!hit) throw new SourceError(f.name, 'hash-mismatch', `"${f.name}" (sha256 ${f.sha256.slice(0, 12)}…) was not found in ${dir} with matching content.`);
-    sources.set(f.id, { ...hit, ref: { ...hit.ref, id: f.id } });
   }
+  const m = matchSources(project.files, loaded.map((l) => ({ name: l.ref.name, sha256: l.ref.sha256 })));
+  for (const f of m.missing) {
+    const err = unreadable.get(f.name);
+    if (err) throw err;
+  }
+  const { errors, notes } = describeMatch(m);
+  if (errors.length) throw new SourceError(m.changed[0]?.file.name ?? m.missing[0].name, 'hash-mismatch', errors.join('\n'));
+  const sources = new Map<string, LoadedSource>();
+  for (const [id, i] of m.matched) sources.set(id, { ...loaded[i], ref: { ...loaded[i].ref, id } });
   return { sources, notes };
 }
 
 /** Scan a folder and draft a project (dates and titles from file names, sorted by date). */
 export async function initProject(dir: string, opts: { actionNo?: string; shortTitle?: string } = {}): Promise<{ project: Project; errors: SourceError[] }> {
-  const names = (await readdir(dir)).filter((n) => !n.startsWith('.')).sort();
+  const names = (await readdir(dir, { withFileTypes: true })).filter((e) => e.isFile() && !e.name.startsWith('.')).map((e) => e.name).sort();
   const files: Project['files'] = [];
   const docs: BundleDoc[] = [];
   const errors: SourceError[] = [];

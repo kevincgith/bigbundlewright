@@ -5,7 +5,7 @@
 A free, browser-only tool that turns a set of PDFs into trial bundles that follow Hong Kong
 **Practice Direction 5.6** (Documents for Use at Trial). Your documents never leave your device.
 
-> Status: in development. Stage 2 (engine + CLI + tests) is done. The browser UI comes in stage 4.
+> Status: in development. Stages 2–3 (engine, CLI, core/transcript bundles, 88-1 inserts, save/load) are done. The browser UI comes in stage 4.
 > A full README (PD 5.6 mapping, privacy, deployment) comes in stage 6.
 
 ## Engine and CLI (Node 24+)
@@ -15,7 +15,8 @@ npm install
 npm run fixtures                      # generate the test documents
 npm test                              # PD 5.6 checks on real generated PDFs
 node cli/cli.ts init <folder> --action "HCA 1234/2025" --title "Chan v Wong"
-node cli/cli.ts build <folder>/project.json --out <output folder>
+node cli/cli.ts build <folder>/project.json --out <output folder> [--issue]
+node cli/cli.ts issue <folder>/project.json   # lock page numbers; later documents go in as 88-1…
 node cli/cli.ts deadline 2026-04-08   # PD 5.6 para 8 lodging deadline
 ```
 

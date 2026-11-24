@@ -13,6 +13,7 @@ const A4L: [number, number] = [841.89, 595.28];
 const here = dirname(fileURLToPath(import.meta.url));
 export const FIXTURE_DIR = join(here, 'out');
 export const BAD_DIR = join(here, 'out-bad');
+export const EXTRA_DIR = join(here, 'out-extra');
 
 const LOREM = 'The parties agree that the matters set out below are true and accurate to the best of their knowledge and belief, '
   + 'save where otherwise stated, and that the documents referred to are copies of the originals held by the solicitors.';
@@ -115,11 +116,23 @@ export const MAIN_SET: { name: string; key: string; pages: number }[] = [
   { name: 'Letter to D (copy).pdf', key: 'LTR', pages: 3 },
 ];
 
+/** Late documents for inserts (PD 5.6 para 1) and a typed copy (para 6). */
+export const EXTRA_SET: { name: string; key: string; pages: number }[] = [
+  { name: '2024-04-15 Late letter.pdf', key: 'LATE', pages: 3 },
+  { name: '2024-04-20 Second late letter.pdf', key: 'LATE2', pages: 2 },
+  { name: 'Typed copy of agreement p1.pdf', key: 'TYPED', pages: 1 },
+  { name: '2024-08-01 Further document.pdf', key: 'FURTHER', pages: 2 },
+  { name: '2024-07-02 Transcript Day 2.pdf', key: 'TX2', pages: 5 },
+];
+
 export async function generate() {
   await rm(FIXTURE_DIR, { recursive: true, force: true });
   await rm(BAD_DIR, { recursive: true, force: true });
+  await rm(EXTRA_DIR, { recursive: true, force: true });
   await mkdir(FIXTURE_DIR, { recursive: true });
   await mkdir(BAD_DIR, { recursive: true });
+  await mkdir(EXTRA_DIR, { recursive: true });
+  for (const e of EXTRA_SET) await writeFile(join(EXTRA_DIR, e.name), await textDoc(e.key, e.name.replace(/\.pdf$/, ''), e.pages));
   const w = (n: string, b: Uint8Array) => writeFile(join(FIXTURE_DIR, n), b);
   const letter = await textDoc('LTR', 'Letter to Defendant', 3);
   await w(MAIN_SET[0].name, await textDoc('WRIT', 'Writ of Summons', 8));

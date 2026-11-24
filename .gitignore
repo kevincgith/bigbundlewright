@@ -6,3 +6,4 @@ dist/
 out/
 test/fixtures/out/
 test/fixtures/out-bad/
+test/fixtures/out-extra/

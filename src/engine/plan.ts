@@ -1,62 +1,61 @@
 // Big Bundle Wright: ordering, volumes and page numbering (pure; no PDF work).
+// Handles the main bundle, the core bundle (PD 5.6 para 2) and the transcript
+// bundle (paras 4-5), and re-planning after issue (para 1 inserts "88-1").
 // SPDX-License-Identifier: MPL-2.0
 
-import type { BuildWarning, BundleDoc, DocStatus, Project, Section } from './model.ts';
+import {
+  ProjectError,
+  type BuildWarning, type BundleDoc, type BundleKind, type DocStatus, type FrozenLayout,
+  type PlanEntry, type PlanPage, type PlanRow, type PlanSectionRow, type Project, type Section,
+} from './model.ts';
 import type { IndexColumn, IndexRow } from './layout-index.ts';
-import { formatDate, volumeLetter } from './util.ts';
+import { formatDate, rangesFromLabels, volumeLetter } from './util.ts';
 
-export interface PlanPage {
-  kind: 'doc' | 'blank';
-  docId?: string;
-  fileId?: string;
-  /** 0-based page index in the source file. */
-  srcIndex?: number;
-  /** Stamped label, e.g. "12", "A12", "C3". */
-  label: string;
-  /** Numbering series ("" for continuous, else the volume or section letter) for "of Y" styles. */
-  series: string;
-}
-
-export interface PlanEntry {
-  kind: 'doc';
-  docId: string;
-  tab: number;
-  part?: { n: number; of: number };
-  /** Index into the volume's content pages. */
-  first: number;
-  count: number;
-  firstLabel: string;
-  lastLabel: string;
-}
-
-export interface PlanSectionRow {
-  kind: 'section';
-  sectionId: string;
-  continued: boolean;
-}
+export type { PlanEntry, PlanPage, PlanRow, PlanSectionRow };
 
 export interface PlanVolume {
   letter: string;
   ordinal: number;
-  rows: (PlanEntry | PlanSectionRow)[];
+  /** "Bundle A", "Core Bundle", "Transcript Bundle B". */
+  name: string;
+  rows: PlanRow[];
   pages: PlanPage[];
-  indexPageCount: number;
+  /** Front sheet + index pages (unnumbered). */
+  prelimPageCount: number;
 }
 
-export interface BuildPlan {
+export interface BundlePlan {
+  kind: BundleKind;
   volumes: PlanVolume[];
-  warnings: BuildWarning[];
-  /** Docs held back for a later stage (transcripts). */
-  deferredDocIds: string[];
   seriesTotals: Record<string, number>;
 }
 
-export type IndexMeasurer = (rows: IndexRow[]) => number;
+export interface BuildPlan {
+  main: BundlePlan;
+  core?: BundlePlan;
+  transcripts?: BundlePlan;
+  warnings: BuildWarning[];
+  /** Total physical files (volumes of every bundle), for PD 5.6 para 7. */
+  physicalFiles: number;
+}
+
+/** Number of unnumbered pages (front sheet + index) a volume with these rows needs. */
+export type PrelimMeasurer = (kind: BundleKind, rows: PlanRow[], xref?: CrossRef) => number;
+
+// ---------- text helpers shared with the builder ----------
+
+export const STATUS_ORDER: DocStatus[] = ['authentic', 'inclusion_only', 'evidence_of_contents'];
 
 export const STATUS_LABEL: Record<DocStatus, string> = {
   authentic: 'Authentic',
   inclusion_only: 'Inclusion only',
   evidence_of_contents: 'Evidence',
+};
+
+export const STATUS_FRONT: Record<DocStatus, string> = {
+  authentic: '(1) Deemed authentic (O.27 r.4) or agreed authentic',
+  inclusion_only: '(2) Agreed for inclusion only',
+  evidence_of_contents: '(3) Also agreed as evidence of contents, subject to weight',
 };
 
 export const STATUS_LEGEND = [
@@ -66,21 +65,41 @@ export const STATUS_LEGEND = [
   + '"Evidence" = also agreed to be admissible as evidence of its contents, subject to submissions on weight.',
 ];
 
+export const FRONT_LEGEND = [
+  'Marked under PD 5.6 para 3. Category (3) documents are agreed as evidence of their contents; '
+  + 'a party may still reserve objection to admissibility on the ground of irrelevance.',
+];
+
 export const VOLUME_COLUMNS: IndexColumn[] = [
-  { key: 'tab', title: 'No.', width: 30, align: 'right' },
+  { key: 'tab', title: 'No.', width: 34, align: 'right' },
   { key: 'date', title: 'Date', width: 64, align: 'left' },
   { key: 'description', title: 'Description', width: 0, align: 'left' },
-  { key: 'status', title: 'Status', width: 62, align: 'left' },
+  { key: 'status', title: 'Status', width: 70, align: 'left' },
   { key: 'pages', title: 'Page(s)', width: 70, align: 'right' },
 ];
 
 export const MASTER_COLUMNS: IndexColumn[] = [
-  { key: 'tab', title: 'No.', width: 30, align: 'right' },
+  { key: 'tab', title: 'No.', width: 34, align: 'right' },
   { key: 'date', title: 'Date', width: 64, align: 'left' },
   { key: 'description', title: 'Description', width: 0, align: 'left' },
-  { key: 'status', title: 'Status', width: 58, align: 'left' },
+  { key: 'status', title: 'Status', width: 70, align: 'left' },
   { key: 'bundle', title: 'Bundle', width: 42, align: 'center' },
   { key: 'pages', title: 'Page(s)', width: 70, align: 'right' },
+];
+
+export const CORE_COLUMNS: IndexColumn[] = [
+  { key: 'tab', title: 'No.', width: 30, align: 'right' },
+  { key: 'date', title: 'Date', width: 62, align: 'left' },
+  { key: 'description', title: 'Description', width: 0, align: 'left' },
+  { key: 'status', title: 'Status', width: 70, align: 'left' },
+  { key: 'bundle', title: 'Main bundle', width: 76, align: 'right' },
+  { key: 'pages', title: 'Page(s)', width: 62, align: 'right' },
+];
+
+export const FRONT_COLUMNS: IndexColumn[] = [
+  { key: 'status', title: 'Status', width: 150, align: 'left' },
+  { key: 'description', title: 'Documents', width: 0, align: 'left' },
+  { key: 'pages', title: 'Page(s)', width: 120, align: 'left' },
 ];
 
 export const formatDateFor = (p: Project, iso: string | null) => formatDate(iso, p.settings.dateStyle);
@@ -99,8 +118,25 @@ export function pageRange(first: string, last: string): string {
   return first === last ? first : `${first}–${last}`;
 }
 
+export function bundleName(kind: BundleKind, letter: string, count: number): string {
+  if (kind === 'main') return `Bundle ${letter}`;
+  const base = kind === 'core' ? 'Core Bundle' : 'Transcript Bundle';
+  return count > 1 ? `${base} ${letter}` : base;
+}
+
+/** "A 39–158" references into the main bundle, per doc id (for the core bundle index). */
+export type CrossRef = Map<string, string>;
+
+export function crossRefs(main: BundlePlan): CrossRef {
+  const m = new Map<string, string[]>();
+  for (const v of main.volumes) for (const r of v.rows) {
+    if (r.kind === 'doc') m.set(r.docId, [...(m.get(r.docId) ?? []), `${v.letter} ${pageRange(r.firstLabel, r.lastLabel)}`]);
+  }
+  return new Map([...m].map(([k, v]) => [k, v.join('; ')]));
+}
+
 /** Index rows for one volume (or any list of plan rows). */
-export function indexRows(project: Project, rows: (PlanEntry | PlanSectionRow)[]): IndexRow[] {
+export function indexRows(project: Project, rows: PlanRow[], xref?: CrossRef): IndexRow[] {
   const docs = new Map(project.docs.map((d) => [d.id, d]));
   const secs = new Map(project.sections.map((s) => [s.id, s]));
   return rows.map((r): IndexRow => {
@@ -112,18 +148,53 @@ export function indexRows(project: Project, rows: (PlanEntry | PlanSectionRow)[]
     return {
       kind: 'doc',
       cells: {
-        tab: String(r.tab),
+        tab: r.tab,
         date: formatDate(d.date, project.settings.dateStyle),
         description: entryDescription(d, r.part),
         status: STATUS_LABEL[d.status],
-        pages: pageRange(r.firstLabel || '888', r.lastLabel || '888'),
+        pages: pageRange(r.firstLabel || '8888', r.lastLabel || '8888'),
+        ...(xref ? { bundle: xref.get(r.docId) ?? '' } : {}),
       },
       linkKey: `${r.docId}#${r.part?.n ?? 1}`,
     };
   });
 }
 
-/** Order docs: by section (in section order) when sections are on; otherwise as given. */
+/** Join page ranges, merging ranges that run on ("1–8", "9–28" → "1–28"). Inserted pages stay separate. */
+export function mergeRanges(ranges: [string, string][]): string {
+  const re = /^([A-Za-z]*)(\d+)$/;
+  const out: [string, string][] = [];
+  for (const [a, b] of ranges) {
+    const prev = out[out.length - 1];
+    const pm = prev && re.exec(prev[1]);
+    const am = re.exec(a);
+    if (pm && am && pm[1] === am[1] && +am[2] === +pm[2] + 1) prev[1] = b;
+    else out.push([a, b]);
+  }
+  return out.map(([a, b]) => pageRange(a, b)).join(', ');
+}
+
+/** PD 5.6 para 3 front sheet: one row per status category. */
+export function frontSheetRows(project: Project, rows: PlanRow[]): IndexRow[] {
+  const docs = new Map(project.docs.map((d) => [d.id, d]));
+  const entries = rows.filter((r): r is PlanEntry => r.kind === 'doc');
+  return STATUS_ORDER.map((st) => {
+    const mine = entries.filter((e) => docs.get(e.docId)?.status === st);
+    const tabs = rangesFromLabels(mine.map((e) => e.tab));
+    return {
+      kind: 'doc',
+      cells: {
+        status: STATUS_FRONT[st],
+        description: mine.length ? `No${mine.length > 1 ? 's' : ''}. ${tabs}` : 'None',
+        pages: mine.length ? mergeRanges(mine.map((e) => [e.firstLabel || '8888', e.lastLabel || '8888'])) : '—',
+      },
+    };
+  });
+}
+
+// ---------- ordering and checks ----------
+
+/** Order main-bundle docs: by section (in section order) when sections are on; otherwise as given. */
 export function orderedDocs(project: Project): BundleDoc[] {
   const main = project.docs.filter((d) => d.type !== 'transcript');
   if (!project.settings.sectionsEnabled) return main;
@@ -172,73 +243,92 @@ export function chronologyWarnings(project: Project, docs: BundleDoc[]): BuildWa
   return out;
 }
 
+// ---------- packing ----------
+
+interface PageRef { fileId: string; srcIndex: number }
+
+/** The pages of a document: its own pages with any typed copies interleaved (PD 5.6 para 6). */
+export function docPageRefs(project: Project, d: BundleDoc): PageRef[] {
+  const files = new Map(project.files.map((f) => [f.id, f]));
+  const f = files.get(d.fileId);
+  if (!f) throw new ProjectError(`"${d.description}" refers to a file that is not in the project (${d.fileId}).`);
+  for (const tc of d.typedCopies ?? []) {
+    if (!files.has(tc.fileId)) throw new ProjectError(`A typed copy for "${d.description}" refers to a missing file (${tc.fileId}).`);
+    if (tc.afterPage < 1 || tc.afterPage > f.pageCount) {
+      throw new ProjectError(`A typed copy for "${d.description}" is set after page ${tc.afterPage}, but the document has ${f.pageCount} page(s).`);
+    }
+  }
+  const out: PageRef[] = [];
+  for (let k = 0; k < f.pageCount; k++) {
+    out.push({ fileId: d.fileId, srcIndex: k });
+    for (const tc of (d.typedCopies ?? []).filter((t) => t.afterPage === k + 1)) {
+      const tf = files.get(tc.fileId)!;
+      for (let j = 0; j < tf.pageCount; j++) out.push({ fileId: tc.fileId, srcIndex: j });
+    }
+  }
+  return out;
+}
+
 interface Draft {
-  rows: (PlanEntry | PlanSectionRow)[];
+  letter?: string;
+  rows: PlanRow[];
   pages: PlanPage[];
   lastSectionId?: string;
   hasDocs: boolean;
 }
 
+interface PackOptions {
+  kind: BundleKind;
+  measure: PrelimMeasurer;
+  limit: number;
+  tabStart: number;
+  /** Continue filling this volume first (used when appending after issue). */
+  initial?: Draft;
+  sectionsSeen?: Set<string>;
+}
+
 /**
- * Pack documents into volumes of at most `maxPagesPerVolume` physical pages
- * (index pages included). A document is split only if it cannot fit in an empty volume.
+ * Pack documents into volumes of at most `limit` physical pages (front sheet and index
+ * included). A document is split only if it cannot fit in an empty volume.
+ * Pages come back unlabelled (label "").
  */
-export function planBundle(project: Project, measure: IndexMeasurer): BuildPlan {
+function packDocs(project: Project, docs: BundleDoc[], o: PackOptions): Draft[] {
   const s = project.settings;
-  const limit = s.maxPagesPerVolume;
-  const files = new Map(project.files.map((f) => [f.id, f]));
-  const warnings: BuildWarning[] = [];
-  const docs = orderedDocs(project);
-  const deferredDocIds = project.docs.filter((d) => d.type === 'transcript').map((d) => d.id);
-  if (deferredDocIds.length) {
-    warnings.push({ code: 'deferred-feature', message: `${deferredDocIds.length} transcript(s) are kept out of the main bundle (PD 5.6 paras 4-5); the separate transcript bundle is built in stage 3.` });
-  }
-  warnings.push(...chronologyWarnings(project, docs));
-
-  // Duplicate content.
-  const byHash = new Map<string, string[]>();
-  for (const f of project.files) byHash.set(f.sha256, [...(byHash.get(f.sha256) ?? []), f.name]);
-  for (const names of byHash.values()) {
-    if (names.length > 1) warnings.push({ code: 'duplicate', message: `Identical content: ${names.map((n) => `"${n}"`).join(', ')}.` });
-  }
-
-  const volumes: Draft[] = [];
+  const useSections = o.kind === 'main' && s.sectionsEnabled;
+  const drafts: Draft[] = [];
   const newDraft = (): Draft => ({ rows: [], pages: [], hasDocs: false });
-  let cur = newDraft();
-  const sectionsSeen = new Set<string>();
-  const measureRows = (rows: (PlanEntry | PlanSectionRow)[]) => measure(indexRows(project, rows));
-  const close = () => { if (cur.hasDocs) volumes.push(cur); cur = newDraft(); };
-  let tab = 0;
+  let cur = o.initial ?? newDraft();
+  const sectionsSeen = o.sectionsSeen ?? new Set<string>();
+  const close = () => { if (cur.hasDocs) drafts.push(cur); cur = newDraft(); };
+  let tab = o.tabStart;
   const parts = new Map<string, PlanEntry[]>();
 
   for (const d of docs) {
-    const f = files.get(d.fileId);
-    if (!f) throw new Error(`Document "${d.description}" refers to a missing file (${d.fileId}).`);
     tab++;
-    let remaining = Array.from({ length: f.pageCount }, (_, i) => i);
+    let remaining = docPageRefs(project, d);
+    const blank = s.printable && remaining.length % 2 === 1 ? 1 : 0;
     let partNo = 0;
     while (remaining.length) {
-      const secId = s.sectionsEnabled ? (d.sectionId ?? '') : undefined;
+      const secId = useSections ? (d.sectionId ?? '') : undefined;
       const secRow: PlanSectionRow | null = secId !== undefined && cur.lastSectionId !== secId
         ? { kind: 'section', sectionId: secId, continued: sectionsSeen.has(secId) }
         : null;
-      const entry: PlanEntry = { kind: 'doc', docId: d.id, tab, first: 0, count: 0, firstLabel: '', lastLabel: '' };
-      const blank = s.printable && f.pageCount % 2 === 1 ? 1 : 0;
+      const entry: PlanEntry = { kind: 'doc', docId: d.id, tab: String(tab), first: 0, count: 0, firstLabel: '', lastLabel: '' };
       const rowsWith = [...cur.rows, ...(secRow ? [secRow] : []), entry];
-      const idx = measureRows(rowsWith);
+      const prelim = o.measure(o.kind, rowsWith);
 
-      const place = (pageIdx: number[], withBlank: boolean) => {
+      const place = (refs: PageRef[], withBlank: boolean) => {
         if (secRow) { cur.rows.push(secRow); cur.lastSectionId = secId; sectionsSeen.add(secId!); }
         entry.first = cur.pages.length;
-        entry.count = pageIdx.length;
-        for (const p of pageIdx) cur.pages.push({ kind: 'doc', docId: d.id, fileId: d.fileId, srcIndex: p, label: '', series: '' });
+        entry.count = refs.length;
+        for (const r of refs) cur.pages.push({ kind: 'doc', docId: d.id, fileId: r.fileId, srcIndex: r.srcIndex, label: '', series: '' });
         if (withBlank) cur.pages.push({ kind: 'blank', docId: d.id, label: '', series: '' });
         cur.rows.push(entry);
         cur.hasDocs = true;
         parts.set(d.id, [...(parts.get(d.id) ?? []), entry]);
       };
 
-      if (cur.pages.length + remaining.length + blank + idx <= limit) {
+      if (cur.pages.length + remaining.length + blank + prelim <= o.limit) {
         if (partNo > 0) entry.part = { n: partNo + 1, of: 0 };
         place(remaining, blank === 1);
         remaining = [];
@@ -248,8 +338,8 @@ export function planBundle(project: Project, measure: IndexMeasurer): BuildPlan 
       // Empty volume and the document still does not fit: split it.
       partNo++;
       entry.part = { n: partNo, of: 0 };
-      const cap = limit - measureRows(rowsWith);
-      if (cap < 1) throw new Error(`The page limit (${limit}) is too small to fit even the index of a volume.`);
+      const cap = o.limit - o.measure(o.kind, rowsWith);
+      if (cap < 1) throw new ProjectError(`The page limit (${o.limit}) is too small to fit even the index of a volume.`);
       place(remaining.slice(0, cap), false);
       remaining = remaining.slice(cap);
       close();
@@ -257,49 +347,307 @@ export function planBundle(project: Project, measure: IndexMeasurer): BuildPlan 
   }
   close();
 
-  for (const [docId, entries] of parts) {
-    if (entries.length > 1) {
-      entries.forEach((e, i) => { e.part = { n: i + 1, of: entries.length }; });
-      const d = project.docs.find((x) => x.id === docId)!;
-      warnings.push({ code: 'doc-split', docId, message: `"${d.description}" alone exceeds the ${limit}-page limit, so it is split across ${entries.length} volumes.` });
-    } else {
-      delete entries[0].part;
+  for (const entries of parts.values()) {
+    if (entries.length > 1) entries.forEach((e, i) => { e.part = { n: i + 1, of: entries.length }; });
+    else delete entries[0].part;
+  }
+  return drafts;
+}
+
+// ---------- labelling ----------
+
+const LABEL_RE = /^([A-Za-z]*)(\d+)(?:-(\d+))?$/;
+
+function seriesFor(project: Project, kind: BundleKind, prefix: string, volLetter: string, docId?: string): string {
+  if (kind !== 'main') return prefix;
+  const s = project.settings;
+  if (s.numbering === 'per-volume') return volLetter;
+  if (s.numbering === 'per-section') {
+    const d = project.docs.find((x) => x.id === docId);
+    return project.sections.find((x) => x.id === d?.sectionId)?.letter ?? '';
+  }
+  return '';
+}
+
+/** Give every unlabelled page the next number in its series. */
+function labelNewPages(project: Project, kind: BundleKind, prefix: string, vols: { letter: string; pages: PlanPage[] }[]) {
+  const counters = new Map<string, number>();
+  for (const v of vols) for (const p of v.pages) {
+    const m = LABEL_RE.exec(p.label);
+    if (m && !m[3]) counters.set(p.series, Math.max(counters.get(p.series) ?? 0, +m[2]));
+  }
+  for (const v of vols) for (const p of v.pages) {
+    if (p.label) continue;
+    const series = seriesFor(project, kind, prefix, v.letter, p.docId);
+    const n = (counters.get(series) ?? 0) + 1;
+    counters.set(series, n);
+    p.series = series;
+    p.label = `${series}${n}`;
+  }
+}
+
+/** Recompute each entry's first page, span and labels from the pages. */
+function refreshEntries(v: { rows: PlanRow[]; pages: PlanPage[] }) {
+  for (const r of v.rows) {
+    if (r.kind !== 'doc') continue;
+    let first = -1, last = -1;
+    v.pages.forEach((p, i) => {
+      if (p.kind === 'doc' && p.docId === r.docId) { if (first < 0) first = i; last = i; }
+    });
+    if (first < 0) throw new ProjectError(`Internal error: no pages for index entry ${r.tab}.`);
+    r.first = first;
+    r.count = last - first + 1;
+    r.firstLabel = v.pages[first].label;
+    r.lastLabel = v.pages[last].label;
+  }
+}
+
+function finalize(project: Project, kind: BundleKind, vols: { letter: string; rows: PlanRow[]; pages: PlanPage[] }[],
+  measure: PrelimMeasurer, warnings: BuildWarning[]): BundlePlan {
+  const seriesTotals: Record<string, number> = {};
+  for (const v of vols) {
+    refreshEntries(v);
+    for (const p of v.pages) {
+      const m = LABEL_RE.exec(p.label);
+      if (m && !m[3]) seriesTotals[p.series] = Math.max(seriesTotals[p.series] ?? 0, +m[2]);
+    }
+  }
+  const volumes = vols.map((v, i): PlanVolume => {
+    const prelimPageCount = measure(kind, v.rows);
+    const name = bundleName(kind, v.letter, vols.length);
+    const total = prelimPageCount + v.pages.length;
+    if (total > project.settings.maxPagesPerVolume) {
+      warnings.push({ code: 'volume-over-limit', message: `${name} has ${total} pages, over the ${project.settings.maxPagesPerVolume}-page limit (PD 5.6 para 5). After issue, pages cannot be moved without renumbering; consider re-issuing the bundle or lodging the extra pages in a supplementary file.` });
+    }
+    return { letter: v.letter, ordinal: i + 1, name, rows: v.rows, pages: v.pages, prelimPageCount };
+  });
+  return { kind, volumes, seriesTotals };
+}
+
+function planFresh(project: Project, kind: BundleKind, docs: BundleDoc[], prefix: string,
+  measure: PrelimMeasurer, warnings: BuildWarning[]): BundlePlan {
+  const drafts = packDocs(project, docs, { kind, measure, limit: project.settings.maxPagesPerVolume, tabStart: 0 });
+  const vols = drafts.map((d, i) => ({ letter: volumeLetter(i), rows: d.rows, pages: d.pages }));
+  labelNewPages(project, kind, prefix, vols);
+  for (const v of vols) for (const r of v.rows) {
+    if (r.kind === 'doc' && r.part) {
+      const d = project.docs.find((x) => x.id === r.docId)!;
+      if (r.part.n === 1) warnings.push({ code: 'doc-split', docId: d.id, message: `"${d.description}" alone exceeds the ${project.settings.maxPagesPerVolume}-page limit, so it is split across ${r.part.of} volumes.` });
+    }
+  }
+  return finalize(project, kind, vols, measure, warnings);
+}
+
+/**
+ * Re-plan an issued bundle. Existing page numbers never change. New material is placed:
+ *  - typed copies of a page → after that page, numbered "45-1";
+ *  - documents with `insertAfter` → after that page, numbered "88-1, 88-2…" (PD 5.6 para 1);
+ *  - other new documents → at the end, continuing the numbering.
+ */
+function planFrozen(project: Project, kind: BundleKind, frozen: FrozenLayout, docs: BundleDoc[], prefix: string,
+  measure: PrelimMeasurer, warnings: BuildWarning[]): BundlePlan {
+  const fb = frozen.bundles[kind]!;
+  const vols = structuredClone(fb.volumes);
+  const files = new Map(project.files.map((f) => [f.id, f]));
+  const byId = new Map(docs.map((d) => [d.id, d]));
+  const allDocs = new Map(project.docs.map((d) => [d.id, d]));
+  const what = kind === 'main' ? 'the issued bundle' : kind === 'core' ? 'the issued core bundle' : 'the issued transcript bundle';
+
+  const frozenDocIds = new Set<string>();
+  for (const v of vols) for (const p of v.pages) {
+    if (p.kind !== 'doc') continue;
+    frozenDocIds.add(p.docId!);
+    const f = files.get(p.fileId!);
+    if (!f) throw new ProjectError(`A file used in ${what} (${p.fileId}) has been removed from the project. Pages cannot be removed after issue without renumbering.`);
+    if (frozen.fileHashes[p.fileId!] && frozen.fileHashes[p.fileId!] !== f.sha256) {
+      throw new ProjectError(`"${f.name}" has different content from the version in ${what}. Restore the original file, or re-issue the bundle.`);
+    }
+  }
+  for (const id of frozenDocIds) {
+    if (!byId.has(id)) {
+      const title = allDocs.get(id)?.description ?? frozen.docTitles?.[id];
+      throw new ProjectError(`${title ? `"${title}"` : `Document ${id}`} is in ${what} but has been removed. Documents cannot be removed after issue without renumbering; re-issue the bundle instead.`);
     }
   }
 
-  // ---- numbering ----
-  const secLetter = new Map(project.sections.map((x) => [x.id, x.letter]));
-  const docSection = new Map(project.docs.map((d) => [d.id, d.sectionId ?? '']));
-  const seriesTotals: Record<string, number> = {};
-  const counters = new Map<string, number>();
-  const out: PlanVolume[] = volumes.map((v, vi) => {
-    const letter = volumeLetter(vi);
-    for (const p of v.pages) {
-      const series = s.numbering === 'continuous' ? ''
-        : s.numbering === 'per-volume' ? letter
-        : (secLetter.get(docSection.get(p.docId!) ?? '') ?? '');
-      const n = (counters.get(series) ?? 0) + 1;
-      counters.set(series, n);
-      p.series = series;
-      p.label = `${series}${n}`;
-      seriesTotals[series] = n;
+  // Locate pages by label.
+  const find = (label: string) => {
+    for (let vi = 0; vi < vols.length; vi++) {
+      const pi = vols[vi].pages.findIndex((p) => p.label === label);
+      if (pi >= 0) return { vi, pi };
     }
-    for (const r of v.rows) {
-      if (r.kind !== 'doc') continue;
-      r.firstLabel = v.pages[r.first].label;
-      r.lastLabel = v.pages[r.first + r.count - 1].label;
-    }
-    return { letter, ordinal: vi + 1, rows: v.rows, pages: v.pages, indexPageCount: measureRows(v.rows) };
-  });
+    return null;
+  };
 
+  interface Ins { anchor: string; refs: PageRef[]; doc: BundleDoc; newRow: boolean }
+  const inserts: Ins[] = [];
+  const appends: BundleDoc[] = [];
+
+  for (const d of docs) {
+    if (frozenDocIds.has(d.id)) {
+      for (const tc of d.typedCopies ?? []) {
+        const present = vols.some((v) => v.pages.some((p) => p.docId === d.id && p.fileId === tc.fileId));
+        if (present) continue;
+        const anchorPage = vols.flatMap((v) => v.pages).find((p) => p.docId === d.id && p.fileId === d.fileId && p.srcIndex === tc.afterPage - 1);
+        if (!anchorPage) throw new ProjectError(`Typed copy for "${d.description}": page ${tc.afterPage} is not in ${what}.`);
+        if (/-\d+$/.test(anchorPage.label)) throw new ProjectError(`Typed copy for "${d.description}": page ${anchorPage.label} is itself an inserted page; re-issue the bundle to add a typed copy after it.`);
+        const tf = files.get(tc.fileId);
+        if (!tf) throw new ProjectError(`A typed copy for "${d.description}" refers to a missing file (${tc.fileId}).`);
+        inserts.push({ anchor: anchorPage.label, refs: Array.from({ length: tf.pageCount }, (_, j) => ({ fileId: tc.fileId, srcIndex: j })), doc: d, newRow: false });
+      }
+      continue;
+    }
+    if (d.insertAfter) {
+      const at = d.insertAfter.trim();
+      if (/-\d+$/.test(at)) {
+        throw new ProjectError(`"${d.description}" is set to go after page ${at}, which is itself an inserted page. Use the original page (${at.replace(/-\d+$/, '')}); the new pages will follow the existing inserts.`);
+      }
+      if (find(at)) { inserts.push({ anchor: at, refs: docPageRefs(project, d), doc: d, newRow: true }); continue; }
+      if (kind === 'main') throw new ProjectError(`"${d.description}" is set to go after page ${at}, but there is no page ${at} in ${what}.`);
+    }
+    appends.push(d);
+  }
+
+  for (const ins of inserts) {
+    const loc = find(ins.anchor)!;
+    const vol = vols[loc.vi];
+    const anchorPage = vol.pages[loc.pi];
+    let pos = loc.pi + 1;
+    let k = 0;
+    while (pos < vol.pages.length && vol.pages[pos].label.startsWith(`${ins.anchor}-`)) pos++;
+    for (const p of vol.pages) {
+      const m = new RegExp(`^${ins.anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-(\\d+)$`).exec(p.label);
+      if (m) k = Math.max(k, +m[1]);
+    }
+    const newPages: PlanPage[] = ins.refs.map((r) => ({
+      kind: 'doc', docId: ins.doc.id, fileId: r.fileId, srcIndex: r.srcIndex, label: `${ins.anchor}-${++k}`, series: anchorPage.series,
+    }));
+    vol.pages.splice(pos, 0, ...newPages);
+    if (ins.newRow) {
+      const ri = vol.rows.findIndex((r) => r.kind === 'doc' && r.docId === anchorPage.docId);
+      const anchorRow = vol.rows[ri] as PlanEntry;
+      let rpos = ri + 1;
+      let n = 0;
+      while (rpos < vol.rows.length) {
+        const r = vol.rows[rpos];
+        if (r.kind === 'doc' && r.tab.startsWith(`${anchorRow.tab}-`)) { n = Math.max(n, +r.tab.split('-').pop()!); rpos++; } else break;
+      }
+      vol.rows.splice(rpos, 0, { kind: 'doc', docId: ins.doc.id, tab: `${anchorRow.tab}-${n + 1}`, first: 0, count: 0, firstLabel: '', lastLabel: '' });
+    }
+  }
+
+  if (appends.length) {
+    const last = vols[vols.length - 1];
+    const tabStart = Math.max(0, ...vols.flatMap((v) => v.rows).filter((r): r is PlanEntry => r.kind === 'doc').map((r) => parseInt(r.tab, 10)));
+    const sectionsSeen = new Set(vols.flatMap((v) => v.rows).filter((r): r is PlanSectionRow => r.kind === 'section').map((r) => r.sectionId));
+    const lastSection = [...last.rows].reverse().find((r): r is PlanSectionRow => r.kind === 'section');
+    const initial: Draft = { letter: last.letter, rows: last.rows, pages: last.pages, hasDocs: true, lastSectionId: lastSection?.sectionId };
+    const drafts = packDocs(project, appends, { kind, measure, limit: project.settings.maxPagesPerVolume, tabStart, sectionsSeen, initial });
+    // drafts[0] is `initial` (the last issued volume, extended in place); the rest are new volumes.
+    for (const d of drafts.slice(1)) vols.push({ letter: volumeLetter(vols.length), rows: d.rows, pages: d.pages });
+    labelNewPages(project, kind, prefix, vols);
+    const lastDated = [...frozenDocIds].map((id) => allDocs.get(id)?.date).filter(Boolean).sort().pop();
+    for (const d of appends) {
+      const pages = vols.flatMap((v) => v.pages).filter((p) => p.docId === d.id);
+      const range = pageRange(pages[0].label, pages[pages.length - 1].label);
+      const late = d.date && lastDated && d.date < lastDated;
+      warnings.push({
+        code: 'appended-after-issue', docId: d.id,
+        message: `"${d.description}" was added after issue with no "insert after" page, so it is placed at the end (${kind === 'main' ? '' : `${bundleName(kind, '', 1)} `}pages ${range})${late ? ' and is out of chronological order. To place it in date order, set the page it should follow (it will be numbered like 88-1)' : ''}.`,
+      });
+    }
+  }
+  return finalize(project, kind, vols, measure, warnings);
+}
+
+/** Labels already used by the main bundle's series, to pick a non-clashing core/transcript prefix. */
+function pickPrefix(want: string, alt: string, used: Set<string>) {
+  return used.has(want) ? alt : want;
+}
+
+export function planProjectBundles(project: Project, measure: PrelimMeasurer): BuildPlan {
+  const s = project.settings;
+  const warnings: BuildWarning[] = [];
+  const frozen = project.frozen;
+  const mainDocs = orderedDocs(project);
+  const transcriptDocs = project.docs.filter((d) => d.type === 'transcript');
+  const coreDocs = mainDocs.filter((d) => d.core);
+
+  if (!frozen) {
+    warnings.push(...chronologyWarnings(project, mainDocs));
+    for (const d of project.docs.filter((x) => x.insertAfter)) {
+      warnings.push({ code: 'insert-before-issue', docId: d.id, message: `"${d.description}" is marked to go after page ${d.insertAfter}, but the bundle has not been issued yet, so it is placed in normal order and numbered normally.` });
+    }
+  }
+
+  // Duplicate content.
+  const byHash = new Map<string, string[]>();
+  for (const f of project.files) byHash.set(f.sha256, [...(byHash.get(f.sha256) ?? []), f.name]);
+  for (const names of byHash.values()) {
+    if (names.length > 1) warnings.push({ code: 'duplicate', message: `Identical content: ${names.map((n) => `"${n}"`).join(', ')}.` });
+  }
+
+  if (!mainDocs.length) throw new ProjectError('There are no documents for the main bundle.');
+  const main = frozen?.bundles.main
+    ? planFrozen(project, 'main', frozen, mainDocs, '', measure, warnings)
+    : planFresh(project, 'main', mainDocs, '', measure, warnings);
+
+  const used = new Set(Object.keys(main.seriesTotals));
+  const filePages = new Map(project.files.map((f) => [f.id, f.pageCount]));
+  const docPages = mainDocs.reduce((a, d) => a + (filePages.get(d.fileId) ?? 0)
+    + (d.typedCopies ?? []).reduce((b, t) => b + (filePages.get(t.fileId) ?? 0), 0), 0);
+
+  let core: BundlePlan | undefined;
+  const xref = crossRefs(main);
+  const coreMeasure: PrelimMeasurer = (k, rows) => measure(k, rows, xref);
+  if (frozen?.bundles.core) {
+    core = planFrozen(project, 'core', frozen, coreDocs, pickPrefix('C', 'CB', used), coreMeasure, warnings);
+  } else if (coreDocs.length) {
+    core = planFresh(project, 'core', coreDocs, pickPrefix('C', 'CB', used), coreMeasure, warnings);
+  } else if (docPages > 100) {
+    warnings.push({ code: 'core-bundle-needed', message: `The agreed bundle has ${docPages} pages of documents. PD 5.6 para 2 says a core bundle should be prepared where it exceeds 100 pages: tag the core documents.` });
+  }
+
+  let transcripts: BundlePlan | undefined;
+  if (frozen?.bundles.transcripts) {
+    transcripts = planFrozen(project, 'transcripts', frozen, transcriptDocs, pickPrefix('T', 'TB', used), measure, warnings);
+  } else if (transcriptDocs.length) {
+    transcripts = planFresh(project, 'transcripts', transcriptDocs, pickPrefix('T', 'TB', used), measure, warnings);
+  }
+
+  const physicalFiles = main.volumes.length + (core?.volumes.length ?? 0) + (transcripts?.volumes.length ?? 0);
+  if (physicalFiles > 5) {
+    warnings.push({ code: 'inside-cover-labels', message: `There are ${physicalFiles} files in total. PD 5.6 para 7: label each on the top right-hand corner of the inside cover (labels are produced with the export).` });
+  }
   if (s.stamp.position !== 'top-right') {
     warnings.push({ code: 'non-compliant-setting', message: `Page numbers are set to the ${s.stamp.position.replace('-', ' ')}; PD 5.6 para 4(3) requires the top right-hand corner.` });
   }
   if (s.stamp.style === 'None') {
     warnings.push({ code: 'non-compliant-setting', message: 'Page numbering is turned off; PD 5.6 para 4(3) requires consecutive page numbers.' });
   }
-  if (limit > 250) {
-    warnings.push({ code: 'non-compliant-setting', message: `The volume limit is ${limit} pages; PD 5.6 para 5 says a file should never include more than 250 pages.` });
+  if (s.maxPagesPerVolume > 250) {
+    warnings.push({ code: 'non-compliant-setting', message: `The volume limit is ${s.maxPagesPerVolume} pages; PD 5.6 para 5 says a file should never include more than 250 pages.` });
   }
-  return { volumes: out, warnings, deferredDocIds, seriesTotals };
+  return { main, core, transcripts, warnings, physicalFiles };
+}
+
+/** Lock page numbers: returns a copy of the project with `frozen` set from this plan. */
+export function freezeProject(project: Project, plan: BuildPlan, issuedAt: string): Project {
+  const strip = (b?: BundlePlan) => b && { volumes: b.volumes.map((v) => ({ letter: v.letter, rows: structuredClone(v.rows), pages: structuredClone(v.pages) })) };
+  const used = new Set<string>();
+  for (const b of [plan.main, plan.core, plan.transcripts]) for (const v of b?.volumes ?? []) for (const p of v.pages) if (p.fileId) used.add(p.fileId);
+  const fileHashes = Object.fromEntries(project.files.filter((f) => used.has(f.id)).map((f) => [f.id, f.sha256]));
+  const bundles: FrozenLayout['bundles'] = { main: strip(plan.main) };
+  if (plan.core) bundles.core = strip(plan.core);
+  if (plan.transcripts) bundles.transcripts = strip(plan.transcripts);
+  const docIds = new Set<string>();
+  for (const b of [plan.main, plan.core, plan.transcripts]) for (const v of b?.volumes ?? []) for (const p of v.pages) if (p.docId) docIds.add(p.docId);
+  const docTitles = Object.fromEntries(project.docs.filter((d) => docIds.has(d.id)).map((d) => [d.id, d.description]));
+  return { ...structuredClone(project), frozen: { issuedAt, fileHashes, docTitles, bundles } };
+}
+
+export function unfreezeProject(project: Project): Project {
+  const p = structuredClone(project);
+  delete p.frozen;
+  return p;
 }
