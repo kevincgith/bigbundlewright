@@ -15,10 +15,16 @@ npm install
 npm run fixtures                      # generate the test documents
 npm test                              # PD 5.6 checks on real generated PDFs
 node cli/cli.ts init <folder> --action "HCA 1234/2025" --title "Chan v Wong"
-node cli/cli.ts build <folder>/project.json --out <output folder> [--issue]
+node cli/cli.ts build <folder>/project.json --out <output folder> [--issue] [--zip]
+                                      # --zip: one ZIP with volume PDFs, master index, Word indexes,
+                                      # labels, PD 5.6 compliance report (PDF + JSON) and project file
 node cli/cli.ts issue <folder>/project.json   # lock page numbers; later documents go in as 88-1…
 node cli/cli.ts deadline 2026-04-08   # PD 5.6 para 8 lodging deadline
 ```
+
+Chinese (Traditional) text and bilingual headings use the vendored Noto Serif TC / Noto Sans TC
+fonts in [`fonts/`](fonts/README.md) (SIL OFL 1.1), subset-embedded so only the characters used go
+into each PDF. The CLI loads them automatically (`--no-fonts` to use the PDF standard fonts).
 
 Design notes and decisions: [docs/stage-1-design.md](docs/stage-1-design.md).
 
