@@ -324,6 +324,64 @@ from in-house IT or legal teams.
    I'd suggest (a) for the e-bundle, since that's what is lodged
    electronically, with (b) as a "print layout" option.
 9. **Licence.** MPL 2.0 (recommended) or MIT?
+10. **Reload from a bundle PDF (§8).** To match BunTool's "Load from bundle PDF",
+    the output PDF has to carry the project data inside it. Options:
+    - (a) Off by default, with an opt-in "embed project for re-editing", stored
+      as a visible PDF file attachment named `project.json` and never as a hidden
+      annotation.
+    - (b) Never embed, and rely on the project JSON only.
+
+    I'd suggest (a). Hidden data in a lodged bundle is a disclosure risk, so it
+    should be a conscious choice.
+
+---
+
+## 8. Feature parity with buntool.co.uk/app
+
+Checked live on 24 Nov 2026 (build `61e666d`). Every feature of the hosted app
+is listed here with how Big Bundle Wright covers it. Nothing is dropped silently.
+
+| BunTool app feature | Big Bundle Wright | Stage |
+|---|---|---|
+| Claim number, bundle title, case name | Court, action no., parties, short title, bundle title (bilingual option) | 2 / 4 |
+| "Mark as Confidential" (red CONFIDENTIAL in title + PDF metadata) | Same: optional red heading on the index and in PDF Title | 2 |
+| Add PDFs by click or drag-and-drop | Same, plus JPG/PNG → A4 | 2 / 4 |
+| Sections, drag documents between sections, delete section (move files or remove) | Same; sections A/B/C with chronological order inside each | 2 / 4 |
+| Section prefix: None / "Section" / "Part" | Same | 2 |
+| **Coversheet**: a pre-made first page before the index (first page only) | Same; option, sits before the index and is unnumbered (subject to Q1) | 2 |
+| Review table: inline-edit title and date, page count, remove | Same, plus type, status, core, Chinese description columns | 4 |
+| Reorder by **drag** or by **arrow buttons** toggle | Same; arrow mode doubles as keyboard reordering | 4 |
+| Sort all globally (merges sections) with confirmation | Sort by date (default) per section or globally, with the same warning | 4 |
+| Date parsing from filenames (chrono-node) | Filename date/title auto-fill (ISO, DD.MM.YYYY, "15 March 2024"); no runtime CDN | 4 |
+| Clear all, with confirmation | Same | 4 |
+| Create Bundle | Build → ZIP (or single PDF when one volume and no extras) | 2 / 5 |
+| **Preview Index** (index pages only) | Same, per volume and master | 2 |
+| Index font: Charis, Liberation Sans, Garamond, Plus Jakarta, Noto Serif, Ubuntu Mono | Index fonts: Noto Serif TC / Noto Sans TC (CJK) plus a Latin serif and sans. All self-hosted OFL; see note | 2 / 5 |
+| Date format (8 styles incl. None) | Same list; default DD/MM/YYYY | 2 |
+| Bookmark style: Plain / With page / With date / With date and page | Same; default "with page" | 2 |
+| Heading and index font size S/M/L | Same | 2 |
+| Table borders on/off | Same | 2 |
+| Page number font, size S/M/L, colour black/red/blue | Same, applied to the top-right stamp | 2 |
+| Numbering style: Page X / Page X of Y / X / X/Y / X of Y / None | Default "X" (PD 5.6 practice); others as options. "None" is allowed but flagged non-compliant in the report | 2 |
+| Footer prefix (e.g. "Exhibit A-") | Same, as stamp prefix | 2 |
+| Footer position left / centre / right | Default **top-right** (para 4(3)); other positions allowed but flagged non-compliant in the report | 2 |
+| Printable mode: blank page after odd-length documents | Same; blank pages are numbered so stamped numbers still match the index | 2 |
+| Restart numbering per section ("Bates", C1, C2…) | Same, alongside per-volume restart (A1, B1…) | 2 |
+| Save settings as defaults / erase defaults / reset | Same, stored in `localStorage` on this device only | 4 |
+| Save progress / Load saved progress (browser autosave, restore prompt) | Same: autosave of **metadata only** to IndexedDB, opt-in, with a "clear saved data" button. Plus the project JSON file | 3 / 4 |
+| Load from bundle PDF (re-edit a previous bundle) | Project JSON is primary. PDF re-import via opt-in embedded attachment (Q10) | 3 |
+| Large-bundle warning (>1000 pages or >50 MB) | Replaced by automatic volume splitting at 250 pp; size shown in the report | 2 |
+| Missing-information prompt before build | Same: missing action no., dates or status listed, with "I'm sure" override | 4 |
+| Processing modal with Cancel | Worker progress bar + Cancel | 4 |
+| "File moved or renamed" error | Hash-checked re-add with mismatch warning | 3 |
+| Tutorial / onboarding (11 steps) | Short first-run guide with the PD 5.6 reminders (incl. para 1 "unnecessary documents") | 4 |
+| Bug-report "copy details" | Copy diagnostic details (no document content, no filenames by default) | 4 |
+| Bundle-event logging to a remote endpoint | **Not copied.** No network calls at runtime | — |
+
+**Fonts.** BunTool's index fonts are OFL or similar. We'll self-host a Latin
+pair (Noto Serif / Noto Sans, matching the TC pair) and may add Charis and
+Liberation Sans for parity. We won't bundle Garamond, Plus Jakarta or Ubuntu Mono
+unless you want the full set: each adds weight and none renders Chinese.
 
 ---
 
