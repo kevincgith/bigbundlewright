@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import './styles.css';
-import logoUrl from '../../assets/logo/logo-horizontal.svg?url';
+import logoUrl from '../../assets/logo/glass-horizontal.svg?url';
 import {
   DEFAULT_SETTINGS, chronologyWarnings, describeDeadline, lodgingDeadline, parseFileName, parseProject,
   serializeProject, unfreezeProject, outputBaseName, PROJECT_SCHEMA,
