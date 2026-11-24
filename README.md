@@ -5,7 +5,7 @@
 A free, browser-only tool that turns a set of PDFs into trial bundles that follow Hong Kong
 **Practice Direction 5.6** (Documents for Use at Trial). Your documents never leave your device.
 
-> Status: in development. Stages 2–3 (engine, CLI, core/transcript bundles, 88-1 inserts, save/load) are done. The browser UI comes in stage 4.
+> Status: in development. Stages 2–4 are done: engine, CLI, core/transcript bundles, 88-1 inserts, save/load, and the browser UI (`npm run dev`).
 > A full README (PD 5.6 mapping, privacy, deployment) comes in stage 6.
 
 ## Engine and CLI (Node 24+)

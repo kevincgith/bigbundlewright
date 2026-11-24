@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en-HK">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Big Bundle Wright — court bundles fit for a 大狀</title>
+  <meta name="description" content="Free, private tool that turns PDFs into Hong Kong PD 5.6 trial bundles. Your documents never leave this device.">
+  <link rel="icon" href="./assets/logo/icon.svg" type="image/svg+xml">
+  <script type="module" src="./src/ui/main.ts"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="masthead">
+    <div class="brand">
+      <img id="logo" alt="Big Bundle Wright" width="212" height="64">
+      <p class="tagline">Court bundles fit for a <span lang="zh-Hant">大狀</span></p>
+    </div>
+    <div id="hdr-actions" class="hdr-actions"></div>
+  </header>
+
+  <div class="privacy" role="note">
+    <span class="lock" aria-hidden="true">🔒</span>
+    <strong>Your documents never leave this device.</strong>
+    <details id="privacy-how">
+      <summary>How?</summary>
+      <p>Big Bundle Wright is a plain web page. Your browser reads the files you add and builds the bundle with code
+        running on this computer. Nothing is uploaded: there is no server processing, no analytics, no cookies and no
+        third-party content, and the page's security policy blocks connections to other sites. Closing the tab
+        discards everything unless you save a project file or tick "Remember project details".</p>
+    </details>
+  </div>
+
+  <main id="main">
+    <div id="restore"></div>
+    <section id="guide" class="card guide-card" aria-label="PD 5.6 in brief"></section>
+    <section id="case" class="card" aria-label="Case details"></section>
+    <section id="docs" class="card" aria-label="Documents"></section>
+    <section id="settings" class="card" aria-label="Settings"></section>
+    <section id="build" class="card" aria-label="Build"></section>
+  </main>
+
+  <footer class="foot">
+    <div id="remember"></div>
+    <p><strong>A formatting tool, not legal advice.</strong> You are responsible for compliance with Practice Direction 5.6
+      and any directions of the court.</p>
+    <p>Big Bundle Wright is free software under the Mozilla Public License 2.0. Its design was informed by
+      <a href="https://github.com/TrisSherliker/buntool2" rel="noopener noreferrer">BunTool</a> by Tristan Sherliker (MPL 2.0);
+      this project is not affiliated with BunTool. Hong Kong general holiday data: HKSAR Government (1823).</p>
+  </footer>
+  <div id="live" class="sr" aria-live="polite"></div>
+</body>
+</html>
