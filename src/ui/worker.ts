@@ -5,8 +5,8 @@
 import * as pdfjs from 'pdfjs-dist/build/pdf.mjs';
 import * as pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs';
 import {
-  analysePdf, buildBundle, loadSource, planProject, ProjectError, SourceError,
-  type LoadedSource, type PageAnalysis, type Project,
+  analysePdf, buildBundle, exportBundle, loadSource, planProject, projectNeedsCjkFonts, FONT_FILES, ProjectError, SourceError,
+  type FontBytes, type LoadedSource, type PageAnalysis, type Project,
 } from '../engine/index.ts';
 import type { FromWorker, ToWorker, FileFlags, PlanSummary } from './protocol.ts';
 
@@ -44,6 +44,26 @@ const ASSETS = {
   useWorkerFetch: false,
   disableWorkerRendering: true,
 };
+
+const fontBase = new URL('../fonts/', new URL(import.meta.env.BASE_URL, self.location.href)).href;
+let fontsPromise: Promise<FontBytes> | null = null;
+/** Chinese fonts (about 27 MB) are fetched from this site only when the project needs them. */
+async function fontsFor(project: Project, onLoading?: () => void): Promise<FontBytes | undefined> {
+  if (!projectNeedsCjkFonts(project)) return undefined;
+  if (!fontsPromise) {
+    onLoading?.();
+    const get = async (f: string) => {
+      const r = await fetch(fontBase + f);
+      if (!r.ok) throw new Error(`Could not load the Chinese font ${f} (${r.status}).`);
+      return new Uint8Array(await r.arrayBuffer());
+    };
+    post({ type: 'fonts', state: 'loading' });
+    fontsPromise = Promise.all([get(FONT_FILES.serifRegular), get(FONT_FILES.serifBold), get(FONT_FILES.sansBold)])
+      .then(([serifRegular, serifBold, sansBold]) => ({ serifRegular, serifBold, sansBold }));
+    fontsPromise.then(() => post({ type: 'fonts', state: 'ready' }), () => { fontsPromise = null; post({ type: 'fonts', state: 'failed' }); });
+  }
+  return fontsPromise;
+}
 
 const bySha = new Map<string, LoadedSource>();
 const analysed = new Map<string, Promise<PageAnalysis[]>>();
@@ -102,7 +122,7 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
         break;
       }
       case 'plan': {
-        const plan = await planProject(m.project);
+        const plan = await planProject(m.project, await fontsFor(m.project));
         post({ type: 'planned', reqId: m.reqId, summary: summarise(plan) });
         break;
       }
@@ -120,12 +140,24 @@ self.onmessage = async (e: MessageEvent<ToWorker>) => {
           for (const f of m.project.files) if (f.sha256 === sha && a) analysis.set(f.id, a);
           post({ type: 'progress', reqId: m.reqId, phase: 'Checking pages', done: ++done, total: shas.length });
         }
-        const out = await buildBundle({
-          project: m.project, sources, analysis, signal, issue: m.issue, prelimsOnly: m.prelimsOnly,
-          onProgress: (p) => post({ type: 'progress', reqId: m.reqId, phase: p.phase === 'volume' ? `Building ${p.volume}` : p.phase === 'master' ? 'Master index' : 'Planning', done: p.done, total: p.total }),
-        });
-        const files = [...out.volumes, ...(out.masterIndex ? [out.masterIndex] : [])].map((v) => ({ fileName: v.fileName, bytes: v.bytes, pageCount: v.pageCount }));
-        post({ type: 'built', reqId: m.reqId, files, warnings: out.warnings, issuedProject: out.issuedProject }, files.map((f) => f.bytes.buffer as ArrayBuffer));
+        const fonts = await fontsFor(m.project, () => post({ type: 'progress', reqId: m.reqId, phase: 'Loading Chinese fonts', done: 0, total: 1 }));
+        const phaseName: Record<string, string> = { plan: 'Planning', master: 'Master index', docx: 'Word indexes', labels: 'Labels', report: 'Compliance report', zip: 'Packing ZIP' };
+        const onProgress = (p: { phase: string; volume?: string; done: number; total: number }) =>
+          post({ type: 'progress', reqId: m.reqId, phase: p.phase === 'volume' ? `Building ${p.volume}` : phaseName[p.phase] ?? p.phase, done: p.done, total: p.total });
+        if (m.prelimsOnly) {
+          const out = await buildBundle({ project: m.project, sources, analysis, signal, fonts, prelimsOnly: true, onProgress });
+          const files = out.volumes.map((v) => ({ fileName: v.fileName, bytes: v.bytes, kind: 'volume', pageCount: v.pageCount }));
+          post({ type: 'built', reqId: m.reqId, files, warnings: out.warnings }, files.map((f) => f.bytes.buffer as ArrayBuffer));
+        } else {
+          const out = await exportBundle({ project: m.project, sources, analysis, signal, fonts, issue: m.issue, onProgress });
+          const pages = new Map(out.build.volumes.map((v) => [v.fileName, v.pageCount] as const));
+          if (out.build.masterIndex) pages.set(out.build.masterIndex.fileName, out.build.masterIndex.pageCount);
+          // Copy each file so every transferred buffer is distinct.
+          const files = out.files.map((f) => ({ fileName: f.name, kind: f.kind, bytes: f.bytes.slice(), pageCount: pages.get(f.name) }));
+          const zip = { fileName: out.zipName, bytes: out.zip };
+          post({ type: 'built', reqId: m.reqId, files, zip, checks: out.report.checks, warnings: out.build.warnings, issuedProject: out.build.issuedProject },
+            [...files.map((f) => f.bytes.buffer as ArrayBuffer), zip.bytes.buffer as ArrayBuffer]);
+        }
         abort = null;
         break;
       }

@@ -8,4 +8,11 @@ const out = join(import.meta.dirname, '..', 'public', 'pdfjs');
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 for (const d of ['standard_fonts', 'cmaps', 'wasm']) await cp(join(root, d), join(out, d), { recursive: true });
-console.log('pdf.js assets copied to public/pdfjs');
+// Chinese fonts (served from this site, loaded only when a project needs them).
+const fontsOut = join(import.meta.dirname, '..', 'public', 'fonts');
+await rm(fontsOut, { recursive: true, force: true });
+await mkdir(fontsOut, { recursive: true });
+for (const f of ['NotoSerifTC-Regular.ttf', 'NotoSerifTC-Bold.ttf', 'NotoSansTC-Bold.ttf', 'OFL.txt', 'OFL-NotoSansTC.txt']) {
+  await cp(join(import.meta.dirname, '..', 'fonts', f), join(fontsOut, f));
+}
+console.log('pdf.js assets and fonts copied to public/');

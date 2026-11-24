@@ -8,3 +8,4 @@ test/fixtures/out/
 test/fixtures/out-bad/
 test/fixtures/out-extra/
 public/pdfjs/
+public/fonts/

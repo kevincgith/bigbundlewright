@@ -1,6 +1,7 @@
 // Big Bundle Wright: messages between the page and the worker.
 // SPDX-License-Identifier: MPL-2.0
 import type { BuildWarning, BundleKind, Project, SourceFileRef } from '../engine/model.ts';
+import type { ComplianceCheck } from '../engine/compliance.ts';
 
 export interface FileFlags { imageOnly: number[]; edge: number[]; corner: number[] }
 
@@ -19,8 +20,15 @@ export type ToWorker =
 export type FromWorker =
   | { type: 'ingested'; reqId: string; ref: SourceFileRef }
   | { type: 'analysed'; sha: string; flags: FileFlags }
+  | { type: 'fonts'; state: 'loading' | 'ready' | 'failed' }
   | { type: 'analysis-failed'; sha: string; message: string }
   | { type: 'planned'; reqId: string; summary: PlanSummary }
   | { type: 'progress'; reqId: string; phase: string; done: number; total: number }
-  | { type: 'built'; reqId: string; files: { fileName: string; bytes: Uint8Array; pageCount: number }[]; warnings: BuildWarning[]; issuedProject?: Project }
+  | {
+    type: 'built'; reqId: string;
+    files: { fileName: string; bytes: Uint8Array; kind: string; pageCount?: number }[];
+    zip?: { fileName: string; bytes: Uint8Array };
+    checks?: ComplianceCheck[];
+    warnings: BuildWarning[]; issuedProject?: Project;
+  }
   | { type: 'error'; reqId: string; name: string; code?: string; fileName?: string; message: string };

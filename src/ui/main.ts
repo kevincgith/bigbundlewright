@@ -11,6 +11,7 @@ import {
 import { orderedDocs } from '../engine/plan.ts';
 import { announce, download, h, replace, uid } from './dom.ts';
 import type { FileFlags, FromWorker, PlanSummary, ToWorker } from './protocol.ts';
+import type { ComplianceCheck } from '../engine/compliance.ts';
 
 const VERSION = '0.4.0';
 const LS = { autosave: 'bigbundlewright:autosave', project: 'bigbundlewright:project', defaults: 'bigbundlewright:defaults', guide: 'bigbundlewright:guide-dismissed' };
@@ -23,6 +24,7 @@ interface WorkerError { name: string; code?: string; fileName?: string; message:
 
 worker.onmessage = (e: MessageEvent<FromWorker>) => {
   const m = e.data;
+  if (m.type === 'fonts') { S.fontsState = m.state; renderBuild(); return; }
   if (m.type === 'analysed' || m.type === 'analysis-failed') {
     S.flags.set(m.sha, m.type === 'analysed' ? m.flags : null);
     if (m.type === 'analysis-failed') { S.analysisErrors.set(m.sha, m.message); console.warn('Page check failed:', m.message); }
@@ -82,11 +84,19 @@ const S = {
   plan: null as PlanSummary | null,
   planError: '' as string,
   job: null as null | { label: string; done: number; total: number },
-  results: null as null | { files: { fileName: string; url: string; pageCount: number; size: number }[]; warnings: BuildWarning[]; preview: boolean },
+  results: null as null | {
+    files: { fileName: string; url: string; pageCount?: number; size: number; kind: string }[];
+    zip?: { fileName: string; url: string; size: number };
+    checks?: ComplianceCheck[];
+    warnings: BuildWarning[]; preview: boolean;
+  },
   reorder: 'drag' as 'drag' | 'arrows',
   ingesting: 0,
   dateDraft: new Map<string, string>(),
   analysisErrors: new Map<string, string>(),
+  /** Rows where the Chinese description box has been opened. */
+  zhOpen: new Set<string>(),
+  fontsState: '' as '' | 'loading' | 'ready' | 'failed',
 };
 
 const DOC_TYPES: [DocType, string][] = [['document', 'Document'], ['pleading', 'Pleading'], ['witness_statement', 'Witness statement'], ['expert', 'Expert report'], ['correspondence', 'Correspondence'], ['transcript', 'Transcript']];
@@ -292,10 +302,13 @@ async function runBuild(opts: { issue?: boolean; prelimsOnly?: boolean } = {}) {
       S.job = { label: p.phase, done: p.done, total: p.total };
       updateProgress();
     });
+    const mime = (n: string) => n.endsWith('.pdf') ? 'application/pdf' : n.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : n.endsWith('.json') ? 'application/json' : 'application/octet-stream';
     S.results = {
       preview: !!opts.prelimsOnly,
       warnings: r.warnings,
-      files: r.files.map((f) => ({ fileName: f.fileName, pageCount: f.pageCount, size: f.bytes.byteLength, url: URL.createObjectURL(new Blob([f.bytes as BlobPart], { type: 'application/pdf' })) })),
+      checks: r.checks,
+      files: r.files.map((f) => ({ fileName: f.fileName, kind: f.kind, pageCount: f.pageCount, size: f.bytes.byteLength, url: URL.createObjectURL(new Blob([f.bytes as BlobPart], { type: mime(f.fileName) })) })),
+      zip: r.zip ? { fileName: r.zip.fileName, size: r.zip.bytes.byteLength, url: URL.createObjectURL(new Blob([r.zip.bytes as BlobPart], { type: 'application/zip' })) } : undefined,
     };
     if (r.issuedProject) { S.project = r.issuedProject; autosave(); renderAll(); }
     announce(opts.prelimsOnly ? 'Index preview ready.' : 'Bundle ready to download.');
@@ -311,6 +324,7 @@ async function runBuild(opts: { issue?: boolean; prelimsOnly?: boolean } = {}) {
 
 function clearResults() {
   for (const f of S.results?.files ?? []) URL.revokeObjectURL(f.url);
+  if (S.results?.zip) URL.revokeObjectURL(S.results.zip.url);
   S.results = null;
 }
 
@@ -391,7 +405,7 @@ function renderCase() {
     dataset: { key: 'court-preset' },
     onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; if (COURTS[v]) { c.court = v ? COURTS[v] : c.court; renderCase(); set(); } },
   }, h('option', { value: '' }, 'Preset…'), ...Object.keys(COURTS).map((k) => h('option', { value: k, selected: COURTS[k] === c.court }, k)));
-  const court = h('textarea', { rows: 3, dataset: { key: 'court' }, oninput: (e: Event) => { c.court = (e.target as HTMLTextAreaElement).value; set(); } });
+  const court = h('textarea', { rows: 3, 'aria-label': 'Court heading (one line per row)', dataset: { key: 'court' }, oninput: (e: Event) => { c.court = (e.target as HTMLTextAreaElement).value; set(); } });
   court.value = c.court;
 
   const parties = h('div', { class: 'parties' },
@@ -399,14 +413,14 @@ function renderCase() {
       textInput(`pn${i}`, p.name, (v) => { p.name = v; set(); }, { placeholder: 'Name (as in the title of the action)', 'aria-label': `Party ${i + 1} name` }),
       textInput(`pr${i}`, p.role, (v) => { p.role = v; set(); }, { placeholder: 'Role', class: 'role', 'aria-label': `Party ${i + 1} role` }),
       h('button', { class: 'btn ghost small', 'aria-label': `Remove party ${i + 1}`, onclick: () => { c.parties.splice(i, 1); renderCase(); set(); } }, '×'))),
-    h('button', { class: 'btn small', onclick: () => { c.parties.push({ name: '', role: 'Defendant' }); renderCase(); } }, 'Add party'));
+    h('div', null, h('button', { class: 'btn small', onclick: () => { c.parties.push({ name: '', role: 'Defendant' }); renderCase(); requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-key="pn${c.parties.length - 1}"]`)?.focus()); } }, 'Add party')));
 
   const cover = c.coversheetFileId ? fileById(c.coversheetFileId) : undefined;
   replace($('case'),
     h('h2', null, h('span', { class: 'step' }, '1'), 'Case details'),
     h('div', { class: 'grid2' },
-      field('Action number', textInput('actionNo', c.actionNo, (v) => { c.actionNo = v; set(); }, { placeholder: 'HCA 1234/2025' })),
-      field('Short title', textInput('shortTitle', c.shortTitle, (v) => { c.shortTitle = v; set(); }, { placeholder: 'Chan v Wong' }), 'Used in file names: "HCA 1234-2025 Chan v Wong Bundle A.pdf".'),
+      field('Action number', textInput('actionNo', c.actionNo, (v) => { c.actionNo = v; set(); }, { placeholder: 'e.g. HCA 1234/2025' })),
+      field('Short title', textInput('shortTitle', c.shortTitle, (v) => { c.shortTitle = v; set(); }, { placeholder: 'e.g. Chan v Wong' }), 'Used in file names, e.g. "HCA 1234-2025 Chan v Wong Bundle A.pdf".'),
       field('Bundle title', textInput('bundleTitle', c.bundleTitle, (v) => { c.bundleTitle = v; set(); })),
       field('Hearing date', h('input', { type: 'date', value: c.hearingDate ?? '', dataset: { key: 'hearing' }, onchange: (e: Event) => { c.hearingDate = (e.target as HTMLInputElement).value || undefined; set(); } }),
         'Used to work out the lodging deadline.')),
@@ -414,10 +428,12 @@ function renderCase() {
     h('div', { class: 'grid2' },
       field('Court', h('div', { class: 'stack' }, courtSel, court)),
       h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Parties'), parties)),
-    h('div', { class: 'row' },
-      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!c.confidential, onchange: (e: Event) => { c.confidential = (e.target as HTMLInputElement).checked; set(); } }), 'Mark as confidential'),
-      h('span', { class: 'cover' }, 'Cover page: ', cover ? h('span', null, cover.name, ' ', h('button', { class: 'btn ghost small', onclick: () => { delete c.coversheetFileId; renderCase(); changed(); } }, 'Remove'))
-        : h('button', { class: 'btn small', onclick: () => pickFiles({ kind: 'cover' }, false) }, 'Add a cover page (optional)'))));
+    h('div', { class: 'grid2 options' },
+      h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Confidentiality'),
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!c.confidential, onchange: (e: Event) => { c.confidential = (e.target as HTMLInputElement).checked; set(); } }), 'Mark the bundle as confidential (shown in red on the index)')),
+      h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Cover page (optional)'),
+        cover ? h('span', null, cover.name, ' ', h('button', { class: 'linkbtn danger', onclick: () => { delete c.coversheetFileId; renderCase(); changed(); } }, 'Remove'))
+          : h('span', null, h('button', { class: 'btn small', onclick: () => pickFiles({ kind: 'cover' }, false) }, 'Choose a cover page…'), h('span', { class: 'hint' }, ' The first page of the file goes before the index, unnumbered.')))));
   renderDeadline();
 }
 
@@ -467,6 +483,7 @@ function docRow(d: BundleDoc, i: number, warn: Map<string, string>, frozenIds: S
   const dateText = S.dateDraft.get(d.id) ?? toDisplay(d.date);
   const notes: (string | Node)[] = [];
   if (missing) notes.push(h('span', { class: 'badge bad' }, 'File needed'));
+  if (!d.date && !S.dateDraft.has(d.id)) notes.push(h('span', { class: 'badge warn', title: 'Add a date so the document can be placed in chronological order.' }, 'No date'));
   if (warn.get(d.id)) notes.push(h('span', { class: 'badge warn', title: warn.get(d.id) }, 'Out of order'));
   if (fl?.imageOnly.length) notes.push(h('span', { class: 'badge', title: `Pages ${fl.imageOnly.join(', ')} are images with no text layer. Check legibility; you can attach a typed copy.` }, `Scanned: ${fl.imageOnly.length} p.`));
   if (fl?.edge.length) notes.push(h('span', { class: 'badge', title: `Pages ${fl.edge.join(', ')} have content within 5 mm of the edge.` }, 'Near edge'));
@@ -495,8 +512,8 @@ function docRow(d: BundleDoc, i: number, warn: Map<string, string>, frozenIds: S
     S.reorder === 'arrows' ? h('span', { class: 'arrows' },
       h('button', { class: 'btn ghost small', disabled: i === 0, 'aria-label': 'Move up', onclick: () => moveDoc(d.id, i - 1) }, '▲'),
       h('button', { class: 'btn ghost small', disabled: i === n - 1, 'aria-label': 'Move down', onclick: () => moveDoc(d.id, i + 1) }, '▼')) : null),
-  h('td', { class: 'num' }, String(i + 1)),
-  h('td', null, h('input', {
+  h('td', { class: 'num', dataset: { label: 'No.' } }, String(i + 1)),
+  h('td', { class: 'datecell', dataset: { label: 'Date' } }, h('input', {
     type: 'text', class: `date ${S.dateDraft.has(d.id) ? 'invalid' : ''}`, value: dateText, placeholder: 'DD/MM/YYYY', dataset: { key: `date-${d.id}` },
     'aria-label': `Date of "${d.description}"`, 'aria-invalid': S.dateDraft.has(d.id) ? 'true' : null,
     onchange: (e: Event) => {
@@ -506,29 +523,33 @@ function docRow(d: BundleDoc, i: number, warn: Map<string, string>, frozenIds: S
       S.dateDraft.delete(d.id); d.date = iso; changed();
     },
   })),
-  h('td', { class: 'desc' },
-    h('input', { type: 'text', value: d.description, dataset: { key: `desc-${d.id}` }, 'aria-label': 'Description', oninput: (e: Event) => { d.description = (e.target as HTMLInputElement).value; autosave(); schedulePlan(); } }),
-    h('input', { type: 'text', class: 'zh', lang: 'zh-Hant', value: d.descriptionZh ?? '', placeholder: '中文描述（選填）', dataset: { key: `zh-${d.id}` }, 'aria-label': 'Chinese description (optional)', oninput: (e: Event) => { d.descriptionZh = (e.target as HTMLInputElement).value || undefined; autosave(); } }),
+  h('td', { class: 'desc', dataset: { label: 'Description' } },
+    h('input', { type: 'text', value: d.description, dataset: { key: `desc-${d.id}` }, 'aria-label': `Description of document ${i + 1}`, oninput: (e: Event) => { d.description = (e.target as HTMLInputElement).value; autosave(); schedulePlan(); } }),
+    d.descriptionZh !== undefined || S.zhOpen.has(d.id)
+      ? h('input', { type: 'text', class: 'zh', lang: 'zh-Hant', value: d.descriptionZh ?? '', placeholder: '中文描述', dataset: { key: `zh-${d.id}` }, 'aria-label': `Chinese description of document ${i + 1}`, oninput: (e: Event) => { const v = (e.target as HTMLInputElement).value; d.descriptionZh = v || undefined; if (!v) S.zhOpen.add(d.id); autosave(); schedulePlan(); } })
+      : null,
     notes.length ? h('div', { class: 'notes' }, ...notes) : null,
     isNew ? h('div', { class: 'insert' }, h('label', null, 'Insert after page ', h('input', {
       type: 'text', class: 'short', value: d.insertAfter ?? '', placeholder: 'e.g. 88', dataset: { key: `ins-${d.id}` },
       onchange: (e: Event) => { d.insertAfter = (e.target as HTMLInputElement).value.trim() || undefined; changed(); },
-    })), h('span', { class: 'hint' }, ' Numbered 88-1, 88-2… Leave blank to add at the end.')) : null),
-  h('td', null, h('select', { 'aria-label': 'Type', dataset: { key: `type-${d.id}` }, onchange: (e: Event) => { d.type = (e.target as HTMLSelectElement).value as DocType; changed(); } },
+    })), h('span', { class: 'hint' }, ' Numbered 88-1, 88-2… Leave blank to add at the end.')) : null,
+    h('div', { class: 'rowactions' },
+      d.descriptionZh === undefined && !S.zhOpen.has(d.id)
+        ? h('button', { class: 'linkbtn', onclick: () => { S.zhOpen.add(d.id); renderDocs(); requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-key="zh-${d.id}"]`)?.focus()); } }, 'Add Chinese description') : null,
+      h('button', { class: 'linkbtn', title: 'Attach a typed copy of an illegible page (PD 5.6 para 6)', onclick: () => askTyped(d) }, 'Attach typed copy'),
+      h('button', {
+        class: 'linkbtn danger', 'aria-label': `Remove "${d.description}"`, disabled: frozen && frozenIds.has(d.id),
+        title: frozen && frozenIds.has(d.id) ? 'Issued documents cannot be removed without re-issuing' : '',
+        onclick: () => { S.project.docs = S.project.docs.filter((x) => x.id !== d.id); S.project.files = S.project.files.filter((f2) => f2.id !== d.fileId || S.project.docs.some((x) => x.fileId === f2.id)); changed(); announce(`Removed "${d.description}".`); },
+      }, 'Remove'))),
+  h('td', { dataset: { label: 'Type' } }, h('select', { 'aria-label': `Type of document ${i + 1}`, dataset: { key: `type-${d.id}` }, onchange: (e: Event) => { d.type = (e.target as HTMLSelectElement).value as DocType; changed(); } },
     ...DOC_TYPES.map(([v, l]) => h('option', { value: v, selected: d.type === v }, l)))),
-  h('td', null, h('select', { 'aria-label': 'Status (PD 5.6 para 3)', dataset: { key: `st-${d.id}` }, onchange: (e: Event) => { d.status = (e.target as HTMLSelectElement).value as DocStatus; changed({ docs: false }); } },
+  h('td', { dataset: { label: 'Status' } }, h('select', { 'aria-label': `Status of document ${i + 1} (PD 5.6 para 3)`, dataset: { key: `st-${d.id}` }, onchange: (e: Event) => { d.status = (e.target as HTMLSelectElement).value as DocStatus; changed({ docs: false }); } },
     ...STATUSES.map(([v, l]) => h('option', { value: v, selected: d.status === v }, l)))),
-  S.project.settings.sectionsEnabled ? h('td', null, h('select', { 'aria-label': 'Section', dataset: { key: `sec-${d.id}` }, onchange: (e: Event) => { d.sectionId = (e.target as HTMLSelectElement).value || undefined; changed(); } },
+  S.project.settings.sectionsEnabled ? h('td', { dataset: { label: 'Section' } }, h('select', { 'aria-label': `Section of document ${i + 1}`, dataset: { key: `sec-${d.id}` }, onchange: (e: Event) => { d.sectionId = (e.target as HTMLSelectElement).value || undefined; changed(); } },
     h('option', { value: '' }, '—'), ...S.project.sections.map((s) => h('option', { value: s.id, selected: d.sectionId === s.id }, `${s.letter} ${s.title}`)))) : null,
-  h('td', { class: 'center' }, h('input', { type: 'checkbox', checked: d.core, disabled: d.type === 'transcript', 'aria-label': 'Core bundle', dataset: { key: `core-${d.id}` }, onchange: (e: Event) => { d.core = (e.target as HTMLInputElement).checked; changed({ docs: false }); } })),
-  h('td', { class: 'num' }, String(docPages(d))),
-  h('td', { class: 'actions' },
-    h('button', { class: 'btn ghost small', title: 'Attach a typed copy of an illegible page (PD 5.6 para 6)', onclick: () => askTyped(d) }, 'Typed copy…'),
-    h('button', {
-      class: 'btn ghost small', 'aria-label': `Remove "${d.description}"`, disabled: frozen && frozenIds.has(d.id),
-      title: frozen && frozenIds.has(d.id) ? 'Issued documents cannot be removed without re-issuing' : 'Remove',
-      onclick: () => { S.project.docs = S.project.docs.filter((x) => x.id !== d.id); S.project.files = S.project.files.filter((f2) => f2.id !== d.fileId || S.project.docs.some((x) => x.fileId === f2.id)); changed(); announce(`Removed "${d.description}".`); },
-    }, 'Remove')));
+  h('td', { class: 'center', dataset: { label: 'Core' } }, h('input', { type: 'checkbox', checked: d.core, disabled: d.type === 'transcript', 'aria-label': `Document ${i + 1} in core bundle`, title: d.type === 'transcript' ? 'Transcripts go in the transcript bundle' : 'Include in the core bundle', dataset: { key: `core-${d.id}` }, onchange: (e: Event) => { d.core = (e.target as HTMLInputElement).checked; changed({ docs: false }); } })),
+  h('td', { class: 'num', dataset: { label: 'Pages' } }, String(docPages(d))));
   return tr;
 }
 
@@ -588,7 +609,7 @@ function renderDocs() {
       h('thead', null, h('tr', null,
         h('th', null, h('span', { class: 'sr' }, 'Reorder')), h('th', null, 'No.'), h('th', null, 'Date'), h('th', null, 'Description'),
         h('th', null, 'Type'), h('th', null, 'Status'), p.settings.sectionsEnabled ? h('th', null, 'Section') : null,
-        h('th', null, 'Core'), h('th', null, 'Pages'), h('th', null, h('span', { class: 'sr' }, 'Actions')))),
+        h('th', null, 'Core'), h('th', null, 'Pages'))),
       h('tbody', null, ...p.docs.map((d, i) => docRow(d, i, warn, frozenIds))))) : null,
     warn.size ? h('p', { class: 'warn' }, `${warn.size} document(s) are out of date order (PD 5.6 para 4(2)). "Sort by date" fixes this, or keep your order if the parties have agreed it.`) : null,
     total > 100 && !anyCore ? h('p', { class: 'notice' }, h('strong', null, 'Core bundle: '), `the documents come to ${total} pages. PD 5.6 para 2 says a core bundle should be prepared where the agreed bundle exceeds 100 pages: tick "Core" for the documents central to the dispute.`) : null,
@@ -620,7 +641,7 @@ function renderSettings() {
   const s = S.project.settings;
   const st = s.stamp;
   replace($('settings'),
-    h('details', null, h('summary', null, h('h2', null, h('span', { class: 'step' }, '3'), 'Settings ', h('span', { class: 'muted small' }, '(defaults follow PD 5.6)'))),
+    h('details', null, h('summary', null, h('h2', null, h('span', { class: 'step' }, '3'), 'Settings', h('span', { class: 'summary-cue' }, ''), h('span', { class: 'muted small normal' }, 'Defaults follow PD 5.6; change only if needed.'))),
       h('div', { class: 'grid3' },
         h('fieldset', null, h('legend', null, 'Volumes and numbering'),
           field('Pages per file', h('input', { type: 'number', min: 20, max: 1000, value: s.maxPagesPerVolume, onchange: (e: Event) => { s.maxPagesPerVolume = Math.max(20, Number((e.target as HTMLInputElement).value) || 250); changed({ docs: false }); } }), 'PD 5.6 para 5: never more than 250.'),
@@ -639,7 +660,9 @@ function renderSettings() {
           sel('Bookmarks', s.outlineStyle, [['withDateAndPage', 'Title (date) — p. 12'], ['withPage', 'Title — p. 12'], ['withDate', 'Title (date)'], ['plain', 'Title']], (v) => { s.outlineStyle = v; }),
           sel('Heading size', s.index.headingSize, [['S', 'Small'], ['M', 'Medium'], ['L', 'Large']], (v) => { s.index.headingSize = v; }),
           sel('Table text size', s.index.tableSize, [['S', 'Small'], ['M', 'Medium'], ['L', 'Large']], (v) => { s.index.tableSize = v; }),
-          chk('Table borders', s.index.borders, (v) => { s.index.borders = v; }))),
+          chk('Table borders', s.index.borders, (v) => { s.index.borders = v; }),
+          chk('English and 繁體中文 headings', s.bilingualHeadings, (v) => { s.bilingualHeadings = v; }),
+          h('p', { class: 'hint' }, 'Chinese text loads extra fonts (about 27 MB, once). Have the Chinese headings checked before lodging.'))),
       h('div', { class: 'row' },
         h('button', { class: 'btn small', onclick: () => { localStorage.setItem(LS.defaults, JSON.stringify(s)); announce('Saved as your defaults on this device.'); } }, 'Save as my defaults'),
         h('button', { class: 'btn ghost small', onclick: () => { localStorage.removeItem(LS.defaults); announce('Saved defaults erased.'); } }, 'Erase saved defaults'),
@@ -670,7 +693,10 @@ function renderBuild() {
     S.planError ? h('div', { class: 'notice bad', role: 'alert' }, S.planError) : null,
     plan ? h('div', { class: 'plan' },
       h('p', null, h('strong', null, `${plan.physicalFiles} file${plan.physicalFiles > 1 ? 's' : ''}: `),
-        plan.volumes.map((v) => `${v.name} (pp. ${v.first}–${v.last}, ${v.pages} sheets)`).join('; '), '.')) : null,
+        plan.volumes.map((v) => `${v.name} (pp. ${v.first}–${v.last}, ${v.pages} pages in all)`).join('; '), '.')) : null,
+    !ready && !S.job ? h('p', { class: 'hint' }, !p.docs.length ? 'Add documents to build the bundle.' : missingFiles().length ? 'Add the missing files again (see Documents) to build.' : 'Reading files…') : null,
+    S.fontsState === 'loading' ? h('p', { class: 'hint', role: 'status' }, 'Loading Chinese fonts (about 27 MB, once per visit)…') : null,
+    S.fontsState === 'failed' ? h('p', { class: 'warn', role: 'alert' }, 'The Chinese fonts could not be loaded; check the connection and try again.') : null,
     h('div', { class: 'row' },
       h('button', { class: 'btn', disabled: !ready || !!S.job, onclick: () => runBuild({ prelimsOnly: true }) }, 'Preview index'),
       h('button', { class: 'btn primary', disabled: !ready || !!S.job, onclick: () => runBuild() }, 'Build bundle'),
@@ -681,13 +707,26 @@ function renderBuild() {
       h('button', { class: 'btn small', onclick: () => worker.postMessage({ type: 'cancel' } satisfies ToWorker) }, 'Cancel')) : null,
     S.results ? h('div', { class: 'results' },
       h('h3', null, S.results.preview ? 'Index preview' : 'Your bundle'),
-      h('ul', { class: 'files' }, ...S.results.files.map((f) => h('li', null,
-        h('a', { href: f.url, download: f.fileName }, f.fileName), h('span', { class: 'muted' }, ` ${f.pageCount} pages, ${kb(f.size)}`),
-        ' ', h('a', { href: f.url, target: '_blank', rel: 'noopener', class: 'small' }, 'Open')))),
+      S.results.zip ? h('p', { class: 'row' },
+        h('a', { class: 'btn primary', href: S.results.zip.url, download: S.results.zip.fileName }, 'Download everything (ZIP)'),
+        h('span', { class: 'muted' }, ` ${S.results.zip.fileName}, ${kb(S.results.zip.size)}`)) : null,
+      h('details', { open: S.results.preview || null },
+        h('summary', { class: 'small linkish-summary' }, S.results.preview ? `Files (${S.results.files.length})` : `Download files one by one (${S.results.files.length})`),
+        h('ul', { class: 'files' }, ...S.results.files.map((f) => h('li', null,
+          h('a', { href: f.url, download: f.fileName }, f.fileName),
+          h('span', { class: 'muted' }, ` ${f.pageCount ? `${f.pageCount} pages, ` : ''}${kb(f.size)}`),
+          f.fileName.endsWith('.pdf') ? [' ', h('a', { href: f.url, target: '_blank', rel: 'noopener', class: 'small' }, 'Open')] : null)))),
+      S.results.checks ? h('div', { class: 'compliance' },
+        h('h3', null, 'PD 5.6 compliance report'),
+        h('table', { class: 'docs' },
+          h('thead', null, h('tr', null, h('th', null, 'Para'), h('th', null, 'Requirement'), h('th', null, 'Result'), h('th', null, 'Detail'))),
+          h('tbody', null, ...S.results.checks.map((c) => h('tr', { class: c.status === 'warning' ? 'oo' : '' },
+            h('td', null, c.para), h('td', null, c.requirement),
+            h('td', null, h('span', { class: `badge ${c.status === 'warning' ? 'warn' : c.status === 'pass' ? '' : 'muted'}` }, c.status === 'pass' ? 'Pass' : c.status === 'warning' ? 'Warning' : 'Not applicable')),
+            h('td', { class: 'small' }, c.detail)))))) : null,
       !S.results.preview ? h('div', { class: 'row' },
-        h('button', { class: 'btn small', onclick: () => S.results!.files.forEach((f, i) => setTimeout(() => { const a = h('a', { href: f.url, download: f.fileName }); a.click(); }, i * 400)) }, 'Download all'),
         h('button', { class: 'btn small', onclick: saveProject }, 'Save project file'),
-        h('span', { class: 'muted small' }, 'A single ZIP with the Word index, labels and compliance report is coming next.')) : null) : null,
+        h('span', { class: 'muted small' }, 'The ZIP already contains the project file.')) : null) : null,
     resultWarnings.length ? h('div', { class: 'checks' },
       h('h3', null, `Checks (${resultWarnings.length})`),
       h('ul', null, ...resultWarnings.map((w) => h('li', { class: sevCodes.has(w.code) ? 'warn' : '' }, w.message)))) : null);

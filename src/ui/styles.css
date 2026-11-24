@@ -124,5 +124,49 @@ td.actions { white-space: nowrap; }
 .foot { border-top: 3px double var(--navy); margin-top: 24px; padding-top: 12px; font-size: 13px; color: var(--muted); }
 .foot p { margin: 6px 0; max-width: 100ch; }
 
-@media (max-width: 720px) { .masthead { flex-direction: column; align-items: flex-start; } .guide { columns: 1; } }
+@media (max-width: 720px) { body { padding: 0 12px 32px; } .card { padding: 14px; } .masthead { flex-direction: column; align-items: flex-start; } .guide { columns: 1; } }
 @media print { .privacy, .hdr-actions, #build, #settings { display: none; } }
+
+/* ---- audit fixes ---- */
+.logo-h1 { margin: 0; line-height: 0; }
+::placeholder { color: #8a8f9c; opacity: 1; }
+.options { margin-top: 4px; }
+.linkbtn { border: 0; background: none; padding: 0; font: 13px var(--sans); color: var(--navy-2); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.linkbtn:hover:not(:disabled) { color: var(--navy); }
+.linkbtn.danger { color: var(--bad); }
+.linkbtn:disabled { color: var(--muted); text-decoration: none; cursor: not-allowed; }
+.rowactions { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 5px; }
+.badge { white-space: nowrap; }
+table.docs select { font-size: 13px; padding: 5px 4px; max-width: 150px; }
+td.desc { min-width: 240px; width: 40%; }
+.summary-cue::after { content: "Show"; font: 500 13px var(--sans); color: var(--navy-2); text-decoration: underline; margin-left: 4px; }
+details[open] > summary .summary-cue::after { content: "Hide"; }
+.normal { font-weight: 400; font-family: var(--sans); }
+details > summary h2 { flex-wrap: wrap; }
+.linkish-summary { color: var(--navy-2); text-decoration: underline; width: max-content; margin: 6px 0; }
+.compliance table td:nth-child(3) { white-space: nowrap; }
+
+/* Documents table becomes stacked cards on narrow screens. */
+.linkbtn { text-align: left; }
+@media (max-width: 960px) {
+  table.docs, table.docs tbody, table.docs td { display: block; }
+  table.docs thead { display: none; }
+  table.docs tr {
+    display: grid; gap: 8px 12px; padding: 12px 4px; border-bottom: 1px solid var(--rule); align-items: start;
+    grid-template-columns: 30px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "h no pages" "h date date" "desc desc desc" "type type core" "status status status" "sec sec sec";
+  }
+  table.docs td { border: 0; padding: 0; text-align: left; }
+  table.docs td[data-label]::before { content: attr(data-label); display: block; font: 600 11.5px var(--sans); color: var(--muted); margin-bottom: 2px; }
+  table.docs .handle-cell { grid-area: h; }
+  table.docs td[data-label="No."] { grid-area: no; }
+  table.docs td[data-label="Pages"] { grid-area: pages; }
+  table.docs td[data-label="Date"] { grid-area: date; }
+  table.docs td[data-label="Description"] { grid-area: desc; width: auto; min-width: 0; }
+  table.docs td[data-label="Type"] { grid-area: type; }
+  table.docs td[data-label="Status"] { grid-area: status; }
+  table.docs td[data-label="Section"] { grid-area: sec; }
+  table.docs td[data-label="Core"] { grid-area: core; }
+  table.docs select { max-width: none; width: 100%; }
+  .tablewrap { overflow: visible; }
+}
